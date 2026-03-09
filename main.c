@@ -9,6 +9,11 @@
 #include "kernel/helpers.h"
 #include "boot/boot.h"
 #include "include/printk.h"
+#include <arch/x86_64/cpu/acpi.h>
+#include <arch/x86_64/cpu/madt.h>
+
+
+
 
 __attribute__((noreturn))
 void kmain(void){
@@ -19,6 +24,8 @@ void kmain(void){
         paging_init(&g_memory_map);
         x86_initGDT();
         idt_init();
+        acpi_init();
+        madt_init();
         if (!x86_lapic_init()) {
                 panic("LAPIC init failed");
         }

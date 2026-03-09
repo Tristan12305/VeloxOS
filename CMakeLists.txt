@@ -30,6 +30,9 @@ add_executable(kernel.elf
     arch/x86_64/idt.c
     arch/x86_64/idt.S
     arch/x86_64/isr_handler.c
+    arch/x86_64/cpu/acpi.c
+    arch/x86_64/cpu/madt.c
+
 )
 
 set_source_files_properties(

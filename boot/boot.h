@@ -78,6 +78,7 @@ typedef struct {
 extern BootFramebuffer g_framebuffer;
 extern BootMemoryMap   g_memory_map;
 extern uint64_t        g_hhdm_offset;
+extern uint64_t        g_rsdp_address;
 
 
 /* -----------------------------------------------------------------------

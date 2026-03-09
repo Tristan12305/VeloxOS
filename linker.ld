@@ -33,9 +33,9 @@ SECTIONS
     . = ALIGN(8);
     .limine_requests : AT(ADDR(.limine_requests) - KERNEL_OFFSET)
     {
-        KEEP(*(.requests_start_marker))
-        KEEP(*(.requests))
-        KEEP(*(.requests_end_marker))
+        KEEP(*(.requests_start_marker .requests_start_marker.*))
+        KEEP(*(.requests .requests.*))
+        KEEP(*(.requests_end_marker .requests_end_marker.*))
     } :rodata
 
     . = ALIGN(4K);
