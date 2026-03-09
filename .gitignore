@@ -1,0 +1,6 @@
+*.iso
+*.o
+*.elf
+build/
+*.sh
+
