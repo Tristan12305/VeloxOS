@@ -1,19 +1,22 @@
 
 
-#include "arch/x86_64/gdt.h"
-#include "arch/x86_64/idt.h"
-#include "arch/x86_64/irq.h"
-#include "arch/x86_64/cpu/apic.h"
-#include "arch/x86_64/cpu/ioapic.h"
-#include "arch/x86_64/drivers/IO/ps2_keyboard.h"
-#include "mm/paging.h"
-#include "mm/pmm.h"
-#include "kernel/panic.h"
-#include "kernel/helpers.h"
-#include "boot/boot.h"
-#include "include/printk.h"
+#include <arch/x86_64/gdt.h>
+#include <arch/x86_64/idt.h>
+#include <arch/x86_64/irq.h>
+#include <arch/x86_64/cpu/apic.h>
+#include <arch/x86_64/cpu/ioapic.h>
+#include <arch/x86_64/drivers/IO/ps2_keyboard.h>
+#include <mm/paging.h>
+#include <mm/pmm.h>
+#include <kernel/panic.h>
+#include <kernel/helpers.h>
+#include <boot/boot.h>
+#include <include/printk.h>
 #include <arch/x86_64/cpu/acpi.h>
 #include <arch/x86_64/cpu/madt.h>
+#include <mm/vmalloc.h>
+#include <arch/x86_64/drivers/block/pci.h>
+
 
 
 
@@ -28,6 +31,8 @@ void kmain(void){
         idt_init();
         acpi_init();
         madt_init();
+        pci_enumerate();
+        vmalloc_init();
         if (!x86_lapic_init()) {
                 panic("LAPIC init failed");
         }
@@ -50,8 +55,8 @@ void kmain(void){
                lapic->x2apic_enabled ? "x2apic" : "xapic",
                lapic->apic_id,
                (unsigned long long)lapic->apic_base_phys);
-        printk("Hello world");
         printk("Interrupts enabled. Waiting for IRQs...\n");
+
         sti();
         for (;;) {
                 hlt();

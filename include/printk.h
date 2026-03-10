@@ -1,7 +1,7 @@
 #pragma once
 
 #include <stdarg.h>
-
+#include <stdint.h>
 /*
  * printk.h
  *
@@ -25,3 +25,4 @@ void printk(const char *fmt, ...);
 
 void clearScreen();
 
+void printk_hex8(uint8_t value);

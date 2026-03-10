@@ -17,13 +17,15 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_ASM_NASM_OBJECT_FORMAT elf64)
 
 add_executable(kernel.elf
-    main.c
+    kernel/main.c
     boot/boot.c
     include/printk.c
     kernel/panic.c
+    kernel/drivers.c
     mm/paging.c
     mm/paging.S
     mm/pmm.c
+    mm/vmalloc.c
     arch/x86_64/cpu/apic.c
     arch/x86_64/gdt.c
     arch/x86_64/gdt.S
@@ -35,6 +37,7 @@ add_executable(kernel.elf
     arch/x86_64/cpu/madt.c
     arch/x86_64/cpu/ioapic.c
     arch/x86_64/drivers/IO/ps2_keyboard.c
+    arch/x86_64/drivers/block/pci.c
 
 )
 

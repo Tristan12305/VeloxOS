@@ -14,10 +14,28 @@ static inline uint8_t inb_u8(uint16_t port) {
     return value;
 }
 
+
 static void ps2_keyboard_irq(interrupt_frame *frame) {
     (void)frame;
     uint8_t scancode = inb_u8(0x60);
-    printk("[kbd] scancode=0x%02x\n", scancode);
+    static bool e0_prefix = false;
+
+    if (scancode == 0xE0) {
+        e0_prefix = true;
+        return;
+    }
+
+    bool release = (scancode & 0x80U) != 0;
+    uint8_t code = scancode & 0x7FU;
+
+    printk("[kbd] %s scancode=0x", release ? "break" : "make");
+    printk_hex8(code);
+    if (e0_prefix) {
+        printk(" (e0)");
+    }
+    printk("\n");
+
+    e0_prefix = false;
 }
 
 bool ps2_keyboard_init(void) {
@@ -28,6 +46,8 @@ bool ps2_keyboard_init(void) {
         return false;
     }
 
-    printk("[kbd] IRQ1 routed to vector 0x%02x\n", PS2_KBD_VECTOR);
+    printk("[kbd] IRQ1 routed to vector 0x");
+    printk_hex8(PS2_KBD_VECTOR);
+    printk("\n");
     return true;
 }

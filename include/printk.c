@@ -382,3 +382,11 @@ void clearScreen(){
     cursor_col = 0;
     cursor_row = 0;
 }
+
+
+void printk_hex8(uint8_t value) {
+    static const char digits[] = "0123456789ABCDEF";
+    char hi = digits[(value >> 4) & 0x0F];
+    char lo = digits[value & 0x0F];
+    printk("%c%c", hi, lo);
+}
