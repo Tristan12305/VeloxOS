@@ -2,7 +2,10 @@
 
 #include "arch/x86_64/gdt.h"
 #include "arch/x86_64/idt.h"
+#include "arch/x86_64/irq.h"
 #include "arch/x86_64/cpu/apic.h"
+#include "arch/x86_64/cpu/ioapic.h"
+#include "arch/x86_64/drivers/IO/ps2_keyboard.h"
 #include "mm/paging.h"
 #include "mm/pmm.h"
 #include "kernel/panic.h"
@@ -11,7 +14,6 @@
 #include "include/printk.h"
 #include <arch/x86_64/cpu/acpi.h>
 #include <arch/x86_64/cpu/madt.h>
-
 
 
 
@@ -28,6 +30,12 @@ void kmain(void){
         madt_init();
         if (!x86_lapic_init()) {
                 panic("LAPIC init failed");
+        }
+        if (!x86_ioapic_init()) {
+                panic("IOAPIC init failed");
+        }
+        if (!ps2_keyboard_init()) {
+                panic("PS/2 keyboard init failed");
         }
         const pmm_info_t* pmm = pmm_get_info();
         const paging_info_t* paging = paging_get_info();

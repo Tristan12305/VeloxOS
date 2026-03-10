@@ -4,23 +4,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
-/* -----------------------------------------------------------------------
- * boot_info.h
- *
- * Exposes the two primary data structures populated by limine_init():
- *
- *   BootFramebuffer  - framebuffer address + geometry returned by Limine
- *   BootMemoryMap    - physical memory map returned by Limine
- *
- * Include this header anywhere you need access to either.
- * Call limine_init() exactly once, early in kernel_main, before using
- * the global instances g_framebuffer or g_memory_map.
- * ----------------------------------------------------------------------- */
 
 
-/* -----------------------------------------------------------------------
- * Framebuffer
- * ----------------------------------------------------------------------- */
+
+
 
 typedef struct {
     void    *address;       /* Virtual (identity-mapped) base address       */
@@ -70,21 +57,13 @@ typedef struct {
 } BootMemoryMap;
 
 
-/* -----------------------------------------------------------------------
- * Globals populated by limine_init()
- * ----------------------------------------------------------------------- */
 
-/* Declared here; defined in limine_init.c */
+
 extern BootFramebuffer g_framebuffer;
 extern BootMemoryMap   g_memory_map;
 extern uint64_t        g_hhdm_offset;
 extern uint64_t        g_rsdp_address;
 
 
-/* -----------------------------------------------------------------------
- * Initialisation
- * ----------------------------------------------------------------------- */
 
-/* Must be called once, before touching g_framebuffer or g_memory_map.
- * Panics (halts) if either required Limine response is absent.             */
 void limine_init(void);

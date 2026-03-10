@@ -7,7 +7,7 @@
 __attribute__((noreturn))
 void earlyPanic(void){
         for(;;){
-                __asm__ __volatile__ ("cli; hlt");
+                __asm__ volatile ("cli; hlt");
         }
         __builtin_unreachable();
 }

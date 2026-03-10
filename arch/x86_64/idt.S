@@ -5,7 +5,7 @@ bits 64
 
 section .text
 
-; Macro for exceptions WITHOUT an error code (CPU doesn't push one)
+; Macro for exceptions WITHOUT an error code
 ; We push a dummy 0 to keep the stack frame uniform
 %macro isr_no_err 1
 isr_stub_%+%1:

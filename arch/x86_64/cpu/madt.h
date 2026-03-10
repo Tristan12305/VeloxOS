@@ -4,9 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-// ---------------------------------------------------------------------------
-// MADT table layout
-// ---------------------------------------------------------------------------
+
 
 typedef struct __attribute__((packed)) {
     acpi_sdt_header_t header;

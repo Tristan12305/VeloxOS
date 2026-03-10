@@ -1,4 +1,5 @@
 #include "isr.h"
+#include "irq.h"
 #include "cpu/apic.h"
 #include <include/printk.h>
 #include <kernel/panic.h>
@@ -54,6 +55,8 @@ void isr_handler(interrupt_frame* frame) {
     }
 
     /* Hardware IRQ / software interrupt vectors. */
+    irq_dispatch(frame);
+
     if (x86_lapic_ready()) {
         x86_lapic_handle_irq((uint8_t)frame->vector);
     }

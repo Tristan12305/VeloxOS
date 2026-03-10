@@ -125,9 +125,9 @@ static void scroll_up(void) {
         dst[i] = src[i];
     }
 
-    /* Clear the last glyph row.                                           */
+    /* Clear the last glyph row (full pitch width).                        */
     fill_rect(0, (rows_max - 1) * FONT_HEIGHT,
-              fb_width_px, FONT_HEIGHT,
+              fb_pitch_px, FONT_HEIGHT,
               COLOR_BG);
 }
 
@@ -366,7 +366,7 @@ void printk_init(void) {
     cursor_col = 0;
     cursor_row = 0;
 
-    fill_rect(0, 0, fb_width_px, fb_height_px, COLOR_BG);
+    fill_rect(0, 0, fb_pitch_px, fb_height_px, COLOR_BG);
 }
 
 void printk(const char *fmt, ...) {
@@ -378,5 +378,7 @@ void printk(const char *fmt, ...) {
 
 
 void clearScreen(){
-    fill_rect(0, 0, fb_width_px, fb_height_px, COLOR_BG);
+    fill_rect(0, 0, fb_pitch_px, fb_height_px, COLOR_BG);
+    cursor_col = 0;
+    cursor_row = 0;
 }

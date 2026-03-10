@@ -36,6 +36,12 @@ typedef struct __attribute__((packed)) {
     uint64_t          entries[];
 } acpi_xsdt_t;
 
+// RSDT — header followed by n × 32-bit table physical addresses.
+typedef struct __attribute__((packed)) {
+    acpi_sdt_header_t header;
+    uint32_t          entries[];
+} acpi_rsdt_t;
+
 void acpi_init(void);
 
 

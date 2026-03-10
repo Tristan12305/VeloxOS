@@ -30,8 +30,11 @@ add_executable(kernel.elf
     arch/x86_64/idt.c
     arch/x86_64/idt.S
     arch/x86_64/isr_handler.c
+    arch/x86_64/irq.c
     arch/x86_64/cpu/acpi.c
     arch/x86_64/cpu/madt.c
+    arch/x86_64/cpu/ioapic.c
+    arch/x86_64/drivers/IO/ps2_keyboard.c
 
 )
 
