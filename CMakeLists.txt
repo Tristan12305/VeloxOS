@@ -40,6 +40,7 @@ add_executable(kernel.elf
     arch/x86_64/drivers/block/pci.c
     arch/x86_64/drivers/block/virtio/vblk.c
     fs/partition/gpt.c
+    lib/string.c
 
 )
 

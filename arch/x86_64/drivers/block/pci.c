@@ -12,6 +12,8 @@
 
 #define PCI_MAX_DEVICES 256
 
+pci_node_t *pci_device_list = NULL;
+size_t      pci_device_count = 0;
 
 static inline void outl_u32(uint16_t port, uint32_t value) {
     __asm__ volatile ("outl %0, %1" :: "a"(value), "Nd"(port));

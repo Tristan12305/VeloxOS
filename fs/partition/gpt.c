@@ -1,6 +1,8 @@
 #include <arch/x86_64/drivers/block/virtio/vblk.h>
 #include "gpt.h"
 #include <include/printk.h>
+#include <lib/string.h>
+
 
 typedef struct {
     char signature[8];
@@ -48,7 +50,7 @@ void read_lba(){
     
     gpt_header_t *hdr = (gpt_header_t *)sector;
 
-    if(__builtin_memcmp(hdr->signature, "EFI PART", 8) != 0){
+    if(memcmp(hdr->signature, "EFI PART", 8) != 0){
         printk("[GPT-Part] Either not a GPT partition. or something went wrong when reading sector 1\n");
     }
 

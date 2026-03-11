@@ -18,7 +18,7 @@
 
 #include "vblk.h"
 #include <arch/x86_64/drivers/block/pci.h>
-
+#include <lib/string.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -180,7 +180,7 @@ static bool virtq_setup(virtio_blk_dev_t *dev) {
     uint64_t phys_base = virt_aligned - g_hhdm_offset;
 
     /* Zero the entire region */
-    __builtin_memset((void *)virt_aligned, 0, total_bytes);
+    memset((void *)virt_aligned, 0, total_bytes);
 
     dev->desc  = (virtq_desc_t  *) virt_aligned;
     dev->avail = (virtq_avail_t *)(virt_aligned + vq_desc_size(qs));
