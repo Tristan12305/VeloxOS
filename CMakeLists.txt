@@ -38,6 +38,8 @@ add_executable(kernel.elf
     arch/x86_64/cpu/ioapic.c
     arch/x86_64/drivers/IO/ps2_keyboard.c
     arch/x86_64/drivers/block/pci.c
+    arch/x86_64/drivers/block/virtio/vblk.c
+    fs/partition/gpt.c
 
 )
 

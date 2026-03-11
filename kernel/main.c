@@ -16,6 +16,9 @@
 #include <arch/x86_64/cpu/madt.h>
 #include <mm/vmalloc.h>
 #include <arch/x86_64/drivers/block/pci.h>
+#include <arch/x86_64/drivers/block/virtio/vblk.h>
+#include <fs/partition/gpt.h>
+
 
 
 
@@ -56,6 +59,8 @@ void kmain(void){
                lapic->apic_id,
                (unsigned long long)lapic->apic_base_phys);
         printk("Interrupts enabled. Waiting for IRQs...\n");
+        virtio_blk_init();
+        read_lba();
 
         sti();
         for (;;) {
