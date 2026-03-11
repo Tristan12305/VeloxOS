@@ -29,6 +29,7 @@
 //I/O port helpers (BAR0 of a legacy VirtIO PCI device is I/O space)
 
 #include <mm/paging.h>
+#include <mm/pmm.h>
 
 static bool virt_to_phys(uint64_t virt, uint64_t *out_phys) {
     const paging_info_t *info = paging_get_info();
@@ -112,104 +113,68 @@ static inline size_t vq_desc_size (uint16_t qs) { return 16u * qs; }
 static inline size_t vq_avail_size(uint16_t qs) { return 6u + 2u * qs; }
 static inline size_t vq_used_size (uint16_t qs) { return 6u + 8u * qs; }
 
+
 static bool virtq_setup(virtio_blk_dev_t *dev) {
-    /* Ask device how large the queue is */
     vio_write16(dev, VIRTIO_PCI_QUEUE_SEL, 0);
     uint16_t qs = vio_read16(dev, VIRTIO_PCI_QUEUE_SIZE);
-    if (qs == 0) {
-        printk("[virtio_blk] device reports queue size 0\n");
-        return false;
-    }
-    /* Cap to our own maximum */
+    if (qs == 0) { printk("[virtio_blk] queue size 0\n"); return false; }
     if (qs > VIRTIO_BLK_QUEUE_SIZE) qs = VIRTIO_BLK_QUEUE_SIZE;
     dev->queue_size = qs;
     printk("[virtio_blk] queue size = %u\n", (unsigned)qs);
 
-    /*
-     * Compute total allocation size with correct alignment.
-     * Desc + avail go on one page; used goes on the next page boundary.
-     */
     size_t desc_avail_bytes = vq_desc_size(qs) + vq_avail_size(qs);
-    size_t used_offset      = (desc_avail_bytes + VIRTIO_PAGE_SIZE - 1)
-                              & ~(size_t)(VIRTIO_PAGE_SIZE - 1);
-    size_t total_bytes      = used_offset + vq_used_size(qs);
+    size_t used_offset = (desc_avail_bytes + VIRTIO_PAGE_SIZE - 1)
+                         & ~(size_t)(VIRTIO_PAGE_SIZE - 1);
+    size_t total_bytes = used_offset + vq_used_size(qs);
 
-    /*
-     * We need the physical address of the allocation to be VIRTIO_PAGE_SIZE
-     * aligned and to hand the PFN to the device.
-     *
-     * vmalloc gives us virtually-contiguous, physically-backed memory.
-     * Because vmalloc allocates whole 4 KiB pages and our HHDM covers all
-     * physical RAM, we can walk the virtual → physical translation to get
-     * the PFN.
-     *
-     * For simplicity we allocate an extra page and round up — this keeps us
-     * independent of whether vmalloc happens to return a page-aligned VA.
-     */
-    size_t alloc_size = total_bytes + VIRTIO_PAGE_SIZE; /* extra for alignment */
-    void *virt = vmalloc(alloc_size, VMALLOC_DEFAULT_FLAGS);
-    if (!virt) {
-        printk("[virtio_blk] vmalloc failed for virtqueue\n");
-        return false;
+    /* Allocate physically contiguous pages directly from PMM.
+     * Access via HHDM so phys = virt - g_hhdm_offset holds exactly. */
+    size_t total_pages = (total_bytes + VIRTIO_PAGE_SIZE - 1) / VIRTIO_PAGE_SIZE;
+
+    /* Allocate pages one at a time and verify they are contiguous.
+     * PMM hands pages out sequentially so this nearly always succeeds. */
+    uint64_t first_phys = PMM_INVALID_PHYS_ADDR;
+    for (size_t i = 0; i < total_pages; i++) {
+        uint64_t phys = PMM_INVALID_PHYS_ADDR;
+        if (!pmm_try_alloc_page_phys(&phys)) {
+            printk("[virtio_blk] PMM out of memory for virtqueue\n");
+            return false;
+        }
+        if (i == 0) {
+            first_phys = phys;
+        } else if (phys != first_phys + i * VIRTIO_PAGE_SIZE) {
+            printk("[virtio_blk] PMM pages not contiguous, giving up\n");
+            return false;
+        }
     }
 
-    /* Align the virtual pointer to VIRTIO_PAGE_SIZE */
-    uintptr_t virt_aligned = ((uintptr_t)virt + VIRTIO_PAGE_SIZE - 1)
-                             & ~(uintptr_t)(VIRTIO_PAGE_SIZE - 1);
+    /* Virtual address through HHDM — guaranteed to be the right physical page */
+    uintptr_t virt_base = (uintptr_t)(g_hhdm_offset + first_phys);
 
-    /*
-     * Derive the physical address.
-     * The HHDM maps phys P to virt (g_hhdm_offset + P).
-     * vmalloc memory is backed by PMM pages, and those pages also live in
-     * the HHDM — but the vmalloc VA is *not* the HHDM VA.
-     *
-     * TODO: expose a proper virt→phys helper (e.g. paging_translate()).
-     * For now we use the HHDM shortcut: since the kernel itself runs with
-     * HHDM covering all physical RAM, and vmalloc pages are PMM pages, we
-     * can convert by subtracting g_hhdm_offset from the HHDM alias of the
-     * same page.  This works only if virt_aligned IS already a HHDM address.
-     *
-     * If vmalloc returns addresses outside the HHDM window, replace this
-     * block with a proper paging_translate(virt_aligned) call once that
-     * function is available.
-     */
+    __builtin_memset((void *)virt_base, 0, total_bytes);
 
-    uint64_t phys_base = 0;
-    if (!virt_to_phys(virt_aligned, &phys_base)) {
-        printk("[virtio_blk] failed to translate virtqueue VA to PA\n");
-        return false;
-    }
+    dev->desc  = (virtq_desc_t  *) virt_base;
+    dev->avail = (virtq_avail_t *)(virt_base + vq_desc_size(qs));
+    dev->used  = (virtq_used_t  *)(virt_base + used_offset);
 
-    /* Zero the entire region */
-    memset((void *)virt_aligned, 0, total_bytes);
-
-    dev->desc  = (virtq_desc_t  *) virt_aligned;
-    dev->avail = (virtq_avail_t *)(virt_aligned + vq_desc_size(qs));
-    dev->used  = (virtq_used_t  *)(virt_aligned + used_offset);
-
-    /* Build the initial free-list: each descriptor points to the next */
     for (uint16_t i = 0; i < qs - 1; i++) {
         dev->desc[i].flags = VIRTQ_DESC_F_NEXT;
         dev->desc[i].next  = (uint16_t)(i + 1);
     }
     dev->desc[qs - 1].flags = 0;
     dev->desc[qs - 1].next  = 0;
-    dev->free_head = 0;
-
+    dev->free_head     = 0;
     dev->last_used_idx = 0;
 
-    /* Tell the device the PFN (physical address >> 12) */
-    uint32_t pfn = (uint32_t)(phys_base >> VIRTIO_PAGE_SHIFT);
+    uint32_t pfn = (uint32_t)(first_phys >> VIRTIO_PAGE_SHIFT);
     vio_write32(dev, VIRTIO_PCI_QUEUE_PFN, pfn);
 
-    printk("[virtio_blk] virtqueue mapped: virt=0x%llx phys=0x%llx pfn=%u\n",
-           (unsigned long long)virt_aligned,
-           (unsigned long long)phys_base,
+    printk("[virtio_blk] virtqueue: virt=0x%llx phys=0x%llx pfn=%u\n",
+           (unsigned long long)virt_base,
+           (unsigned long long)first_phys,
            (unsigned)pfn);
     return true;
 }
-
-
 
 bool virtio_blk_init(void) {
     /* Step 1 — locate the device on the PCI bus */
