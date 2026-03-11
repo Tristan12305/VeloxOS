@@ -44,15 +44,20 @@ typedef struct{
 void read_lba(){
     uint64_t sector[256];
 
+    printk("beginning virtio read call\n");
+
     if(!virtio_blk_read(1, 1, sector)){
         printk("[GPT-Part] Could not read LBA1\n"); 
     }
+    printk("[gpt] read returned successfully\n");
+
     
     gpt_header_t *hdr = (gpt_header_t *)sector;
 
     if(memcmp(hdr->signature, "EFI PART", 8) != 0){
         printk("[GPT-Part] Either not a GPT partition. or something went wrong when reading sector 1\n");
     }
+
 
     printk("[gpt] revision         : 0x%08x\n", hdr->revision);
     printk("[gpt] header_size      : %u bytes\n", hdr->header_size);

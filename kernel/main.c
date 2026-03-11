@@ -62,7 +62,9 @@ void kmain(void){
 
         sti();
         virtio_blk_init();
+        printk("virtio finished successfully\n");
         read_lba();
+        printk("read_lba function done\n");
 
         for (;;) {
                 hlt();

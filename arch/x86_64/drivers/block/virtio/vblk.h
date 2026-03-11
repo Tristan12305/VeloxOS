@@ -105,7 +105,7 @@ typedef struct {
     /* Virtqueue 0 (the only requestq for virtio-blk) */
     virtq_desc_t  *desc;         /* descriptor table   (queue_size entries) */
     virtq_avail_t *avail;        /* driver → device    */
-    virtq_used_t  *used;         /* device → driver    */
+    volatile virtq_used_t  *used;         /* device → driver    */
 
     uint16_t    queue_size;      /* negotiated queue size */
     uint16_t    free_head;       /* head of free descriptor list */

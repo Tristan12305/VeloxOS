@@ -312,12 +312,12 @@ bool virtio_blk_read(uint64_t sector, uint32_t count, void *buf) {
     dev->avail->ring[avail_idx] = d0;
     __asm__ volatile("" ::: "memory");
     dev->avail->idx++;
-    __asm__ volatile("" ::: "memory");
+    __asm__ volatile("mfence" ::: "memory");
 
     vio_write16(dev, VIRTIO_PCI_QUEUE_NOTIFY, 0);
 
     while (dev->used->idx == dev->last_used_idx)
-        __asm__ volatile("pause");
+        __asm__ volatile("pause" ::: "memory");
     dev->last_used_idx++;
 
     dev->desc[d2].next = dev->free_head;
@@ -358,7 +358,7 @@ bool virtio_blk_write(uint64_t sector, uint32_t count, const void *buf) {
     *status = 0xFF;
 
     // copy caller's data into DMA buffer BEFORE submitting
-    __builtin_memcpy((void *)(dev->dma_virt + 16), buf, len);
+    memcpy((void *)(dev->dma_virt + 16), buf, len);
 
     uint16_t d0 = dev->free_head;
     uint16_t d1 = dev->desc[d0].next;
