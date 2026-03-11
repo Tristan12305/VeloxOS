@@ -34,27 +34,38 @@ static const char* const exception_messages[] = {
     "Reserved"
 };
 
+
 void isr_handler(interrupt_frame* frame) {
     if (frame->vector < 32) {
-        printk("[exc] vec=%llu err=0x%llx rip=0x%llx cs=0x%llx rflags=0x%llx\n",
-               (unsigned long long)frame->vector,
-               (unsigned long long)frame->error_code,
-               (unsigned long long)frame->rip,
-               (unsigned long long)frame->cs,
-               (unsigned long long)frame->rflags);
+        printk("\n[EXCEPTION] %s (vector=%llu)\n",
+               exception_messages[frame->vector],
+               (unsigned long long)frame->vector);
+        printk("  error_code : 0x%llx\n", (unsigned long long)frame->error_code);
+        printk("  rip        : 0x%llx\n", (unsigned long long)frame->rip);
+        printk("  cs         : 0x%llx\n", (unsigned long long)frame->cs);
+        printk("  rflags     : 0x%llx\n", (unsigned long long)frame->rflags);
+        //printk("  rsp        : 0x%llx\n", (unsigned long long)frame->rsp);  // only valid in ring0 frame if no priv change
+        printk("  rax        : 0x%llx\n", (unsigned long long)frame->rax);
+        printk("  rbx        : 0x%llx\n", (unsigned long long)frame->rbx);
+        printk("  rcx        : 0x%llx\n", (unsigned long long)frame->rcx);
+        printk("  rdx        : 0x%llx\n", (unsigned long long)frame->rdx);
 
-        if (interrupt_from_user(frame)) {
-            const interrupt_frame_ring3* user_frame = (const interrupt_frame_ring3*)frame;
-            (void)user_frame;
-        } else {
-            const interrupt_frame_ring0* kernel_frame = (const interrupt_frame_ring0*)frame;
-            (void)kernel_frame;
+        // CR2 holds the faulting virtual address for page faults
+        if (frame->vector == 14) {
+            uint64_t cr2;
+            __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+            printk("  cr2 (fault addr) : 0x%llx\n", (unsigned long long)cr2);
+            printk("  page fault flags : %s%s%s%s%s\n",
+                   (frame->error_code & (1<<0)) ? "PRESENT "   : "NOT-PRESENT ",
+                   (frame->error_code & (1<<1)) ? "WRITE "     : "READ ",
+                   (frame->error_code & (1<<2)) ? "USER "      : "KERNEL ",
+                   (frame->error_code & (1<<3)) ? "RSVD-BIT "  : "",
+                   (frame->error_code & (1<<4)) ? "INSTR-FETCH" : "");
         }
 
         panic(exception_messages[frame->vector]);
     }
 
-    /* Hardware IRQ / software interrupt vectors. */
     irq_dispatch(frame);
 
     if (x86_lapic_ready()) {

@@ -59,10 +59,11 @@ void kmain(void){
                lapic->apic_id,
                (unsigned long long)lapic->apic_base_phys);
         printk("Interrupts enabled. Waiting for IRQs...\n");
+
+        sti();
         virtio_blk_init();
         read_lba();
 
-        sti();
         for (;;) {
                 hlt();
         }
