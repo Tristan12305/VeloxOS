@@ -110,6 +110,9 @@ typedef struct {
     uint16_t    queue_size;      /* negotiated queue size */
     uint16_t    free_head;       /* head of free descriptor list */
     uint16_t    last_used_idx;   /* shadow of used->idx for polling */
+
+    uint64_t  dma_phys;      // physical base of DMA region 
+    uintptr_t dma_virt; 
 } virtio_blk_dev_t;
 
 /* Public interface */

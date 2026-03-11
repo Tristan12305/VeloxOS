@@ -28,14 +28,8 @@
 
 //I/O port helpers (BAR0 of a legacy VirtIO PCI device is I/O space)
 
-#include <mm/paging.h>
 #include <mm/pmm.h>
 
-static bool virt_to_phys(uint64_t virt, uint64_t *out_phys) {
-    const paging_info_t *info = paging_get_info();
-    if (!info) return false;
-    return paging_translate(info->root_pml4_phys, virt, out_phys);
-}
 
 
 
@@ -60,10 +54,10 @@ static inline uint32_t _inl(uint16_t port) { uint32_t v; __asm__ volatile("inl %
 #define VIRTIO_DEV_BLOCK_LEGACY 0x1001u   /* transitional / legacy */
 #define VIRTIO_DEV_BLOCK_MODERN 0x1042u   /* virtio 1.0+ only      */
 
-/* -----------------------------------------------------------------------
- * Device config area (immediately after the 20-byte I/O config header,
- * i.e. at VIRTIO_PCI_CONFIG_OFF = 20 for MSI-X disabled devices).
- * ----------------------------------------------------------------------- */
+
+
+
+
 #define VIRTIO_PCI_CONFIG_OFF   20   /* no MSI-X; with MSI-X it is 24 */
 
 #define BLKCFG_CAPACITY_LO  (VIRTIO_PCI_CONFIG_OFF + 0x00)   /* u32 lo of capacity (sectors) */
@@ -247,8 +241,17 @@ bool virtio_blk_init(void) {
         vio_write8(dev, VIRTIO_PCI_STATUS, VIRTIO_STATUS_FAILED);
         return false;
     }
+    // allocate enough pages for header + max data + status
+// 1 header page is plenty for now (supports up to ~4080 bytes of data per request)
+    uint64_t dma_phys = PMM_INVALID_PHYS_ADDR;
+    if (!pmm_try_alloc_page_phys(&dma_phys)) {
+        printk("[virtio_blk] failed to alloc DMA page\n");
+        return false;
+    }
+    dev->dma_phys = dma_phys;
+    dev->dma_virt = (uintptr_t)(g_hhdm_offset + dma_phys);
+    memset((void *)dev->dma_virt, 0, 4096);
 
-    /* Step 7 — DRIVER_OK: tell the device we're ready */
     vio_write8(dev, VIRTIO_PCI_STATUS,
                VIRTIO_STATUS_ACKNOWLEDGE |
                VIRTIO_STATUS_DRIVER      |
@@ -259,14 +262,8 @@ bool virtio_blk_init(void) {
     return true;
 }
 
-/* -----------------------------------------------------------------------
- * Synchronous I/O (polling — no interrupts yet)
- *
- * Each request uses a 3-descriptor chain:
- *   [0] virtio_blk_req_hdr_t  (device reads)
- *   [1] data buffer            (device reads for OUT, writes for IN)
- *   [2] status byte            (device writes)
- * ----------------------------------------------------------------------- */
+
+
 
 bool virtio_blk_read(uint64_t sector, uint32_t count, void *buf) {
     if (!g_virtio_blk_ready) return false;
@@ -274,129 +271,38 @@ bool virtio_blk_read(uint64_t sector, uint32_t count, void *buf) {
     virtio_blk_dev_t *dev = &g_virtio_blk;
     uint32_t len = count * dev->blk_size;
 
-    /* Allocate request header + status byte on stack (they must stay valid
-     * until the device finishes — polling ensures that here). */
-    virtio_blk_req_hdr_t hdr = {
-        .type     = VIRTIO_BLK_T_IN,
-        .reserved = 0,
-        .sector   = sector,
-    };
-    volatile uint8_t status = 0xFF;
+    // DMA region layout within the one allocated page:
+    //   offset 0    : virtio_blk_req_hdr_t (16 bytes)
+    //   offset 16   : data buffer          (len bytes)
+    //   offset 16+len: status byte         (1 byte)
+    uint64_t hdr_phys    = dev->dma_phys;
+    uint64_t buf_phys    = dev->dma_phys + 16;
+    uint64_t status_phys = dev->dma_phys + 16 + len;
 
-    /*
-     * We need physically-contiguous, accessible memory for the three buffers.
-     * For the header and status we use stack addresses translated via HHDM.
-     * For the data buffer we expect the caller to pass a vmalloc'd or HHDM
-     * address; a proper virt→phys helper should be used once available.
-     *
-     * TODO: add scatter-gather support when buf spans multiple pages.
-     */
-    uint64_t hdr_phys = 0, buf_phys = 0, status_phys = 0;
-    if (!virt_to_phys((uint64_t)(uintptr_t)&hdr,    &hdr_phys)    ||
-        !virt_to_phys((uint64_t)(uintptr_t)buf,      &buf_phys)    ||
-        !virt_to_phys((uint64_t)(uintptr_t)&status,  &status_phys)) {
-        printk("[virtio_blk] failed to translate DMA buffers\n");
-        return false;
-    }
+    virtio_blk_req_hdr_t *hdr = (virtio_blk_req_hdr_t *)dev->dma_virt;
+    volatile uint8_t     *status = (volatile uint8_t *)(dev->dma_virt + 16 + len);
 
-    /* Grab 3 descriptors from the free list */
-    if (dev->free_head + 3 > dev->queue_size) {
-        printk("[virtio_blk] not enough free descriptors\n");
-        return false;
-    }
+    hdr->type     = VIRTIO_BLK_T_IN;
+    hdr->reserved = 0;
+    hdr->sector   = sector;
+    *status = 0xFF;
+
+    // grab 3 descriptors
     uint16_t d0 = dev->free_head;
     uint16_t d1 = dev->desc[d0].next;
     uint16_t d2 = dev->desc[d1].next;
     dev->free_head = dev->desc[d2].next;
 
-    /* Descriptor 0 — request header (read-only for device) */
     dev->desc[d0].addr  = hdr_phys;
-    dev->desc[d0].len   = sizeof(hdr);
+    dev->desc[d0].len   = sizeof(virtio_blk_req_hdr_t);
     dev->desc[d0].flags = VIRTQ_DESC_F_NEXT;
     dev->desc[d0].next  = d1;
 
-    /* Descriptor 1 — data buffer (device writes into it) */
     dev->desc[d1].addr  = buf_phys;
     dev->desc[d1].len   = len;
     dev->desc[d1].flags = VIRTQ_DESC_F_WRITE | VIRTQ_DESC_F_NEXT;
     dev->desc[d1].next  = d2;
 
-    /* Descriptor 2 — status byte (device writes) */
-    dev->desc[d2].addr  = status_phys;
-    dev->desc[d2].len   = 1;
-    dev->desc[d2].flags = VIRTQ_DESC_F_WRITE;
-    dev->desc[d2].next  = 0;
-
-    /* Place the chain head in the available ring */
-    uint16_t avail_idx = dev->avail->idx & (dev->queue_size - 1);
-    dev->avail->ring[avail_idx] = d0;
-    __asm__ volatile("" ::: "memory");   /* compiler barrier */
-    dev->avail->idx++;
-    __asm__ volatile("" ::: "memory");
-
-    /* Kick the device */
-    vio_write16(dev, VIRTIO_PCI_QUEUE_NOTIFY, 0);
-
-    /* Poll for completion */
-    while (dev->used->idx == dev->last_used_idx) {
-        __asm__ volatile("pause");
-    }
-    dev->last_used_idx++;
-
-    /* Return descriptors to free list */
-    dev->desc[d2].next = dev->free_head;
-    dev->free_head = d0;
-
-    if (status != VIRTIO_BLK_S_OK) {
-        printk("[virtio_blk] read error: status = %u\n", (unsigned)status);
-        return false;
-    }
-    return true;
-}
-
-bool virtio_blk_write(uint64_t sector, uint32_t count, const void *buf) {
-    if (!g_virtio_blk_ready) return false;
-    if (g_virtio_blk.read_only) {
-        printk("[virtio_blk] device is read-only\n");
-        return false;
-    }
-
-    virtio_blk_dev_t *dev = &g_virtio_blk;
-    uint32_t len = count * dev->blk_size;
-
-    virtio_blk_req_hdr_t hdr = {
-        .type     = VIRTIO_BLK_T_OUT,
-        .reserved = 0,
-        .sector   = sector,
-    };
-    volatile uint8_t status = 0xFF;
-
-    uint64_t hdr_phys = 0, buf_phys = 0, status_phys = 0;
-    if (!virt_to_phys((uint64_t)(uintptr_t)&hdr,    &hdr_phys)    ||
-        !virt_to_phys((uint64_t)(uintptr_t)buf,      &buf_phys)    ||
-        !virt_to_phys((uint64_t)(uintptr_t)&status,  &status_phys)) {
-        printk("[virtio_blk] failed to translate DMA buffers\n");
-        return false;
-    }
-
-    uint16_t d0 = dev->free_head;
-    uint16_t d1 = dev->desc[d0].next;
-    uint16_t d2 = dev->desc[d1].next;
-    dev->free_head = dev->desc[d2].next;
-
-    /* Header — device reads */
-    dev->desc[d0].addr  = hdr_phys;
-    dev->desc[d0].len   = sizeof(hdr);
-    dev->desc[d0].flags = VIRTQ_DESC_F_NEXT;
-    dev->desc[d0].next  = d1;
-
-    /* Data — device reads */
-    dev->desc[d1].addr  = buf_phys;
-    dev->desc[d1].len   = len;
-    dev->desc[d1].flags = VIRTQ_DESC_F_NEXT;   /* no WRITE — device reads */
-    dev->desc[d1].next  = d2;
-
-    /* Status — device writes */
     dev->desc[d2].addr  = status_phys;
     dev->desc[d2].len   = 1;
     dev->desc[d2].flags = VIRTQ_DESC_F_WRITE;
@@ -417,8 +323,80 @@ bool virtio_blk_write(uint64_t sector, uint32_t count, const void *buf) {
     dev->desc[d2].next = dev->free_head;
     dev->free_head = d0;
 
-    if (status != VIRTIO_BLK_S_OK) {
-        printk("[virtio_blk] write error: status = %u\n", (unsigned)status);
+    if (*status != VIRTIO_BLK_S_OK) {
+        printk("[virtio_blk] read error: status=%u\n", (unsigned)*status);
+        return false;
+    }
+
+    // copy from DMA bounce buffer into caller's buffer
+    memcpy(buf, (void *)(dev->dma_virt + 16), len);
+    return true;
+}
+
+
+
+bool virtio_blk_write(uint64_t sector, uint32_t count, const void *buf) {
+    if (!g_virtio_blk_ready) return false;
+    if (g_virtio_blk.read_only) {
+        printk("[virtio_blk] device is read-only\n");
+        return false;
+    }
+
+    virtio_blk_dev_t *dev = &g_virtio_blk;
+    uint32_t len = count * dev->blk_size;
+
+    uint64_t hdr_phys    = dev->dma_phys;
+    uint64_t buf_phys    = dev->dma_phys + 16;
+    uint64_t status_phys = dev->dma_phys + 16 + len;
+
+    virtio_blk_req_hdr_t *hdr    = (virtio_blk_req_hdr_t *)dev->dma_virt;
+    volatile uint8_t     *status = (volatile uint8_t *)(dev->dma_virt + 16 + len);
+
+    hdr->type     = VIRTIO_BLK_T_OUT;
+    hdr->reserved = 0;
+    hdr->sector   = sector;
+    *status = 0xFF;
+
+    // copy caller's data into DMA buffer BEFORE submitting
+    __builtin_memcpy((void *)(dev->dma_virt + 16), buf, len);
+
+    uint16_t d0 = dev->free_head;
+    uint16_t d1 = dev->desc[d0].next;
+    uint16_t d2 = dev->desc[d1].next;
+    dev->free_head = dev->desc[d2].next;
+
+    dev->desc[d0].addr  = hdr_phys;
+    dev->desc[d0].len   = sizeof(virtio_blk_req_hdr_t);
+    dev->desc[d0].flags = VIRTQ_DESC_F_NEXT;
+    dev->desc[d0].next  = d1;
+
+    dev->desc[d1].addr  = buf_phys;
+    dev->desc[d1].len   = len;
+    dev->desc[d1].flags = VIRTQ_DESC_F_NEXT;  // no WRITE — device reads
+    dev->desc[d1].next  = d2;
+
+    dev->desc[d2].addr  = status_phys;
+    dev->desc[d2].len   = 1;
+    dev->desc[d2].flags = VIRTQ_DESC_F_WRITE;
+    dev->desc[d2].next  = 0;
+
+    uint16_t avail_idx = dev->avail->idx & (dev->queue_size - 1);
+    dev->avail->ring[avail_idx] = d0;
+    __asm__ volatile("" ::: "memory");
+    dev->avail->idx++;
+    __asm__ volatile("" ::: "memory");
+
+    vio_write16(dev, VIRTIO_PCI_QUEUE_NOTIFY, 0);
+
+    while (dev->used->idx == dev->last_used_idx)
+        __asm__ volatile("pause");
+    dev->last_used_idx++;
+
+    dev->desc[d2].next = dev->free_head;
+    dev->free_head = d0;
+
+    if (*status != VIRTIO_BLK_S_OK) {
+        printk("[virtio_blk] write error: status=%u\n", (unsigned)*status);
         return false;
     }
     return true;
