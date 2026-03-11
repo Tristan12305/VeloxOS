@@ -28,7 +28,15 @@
 
 //I/O port helpers (BAR0 of a legacy VirtIO PCI device is I/O space)
 
-extern uint64_t g_hhdm_offset;  /* defined in boot/limine.c */
+#include <mm/paging.h>
+
+static bool virt_to_phys(uint64_t virt, uint64_t *out_phys) {
+    const paging_info_t *info = paging_get_info();
+    if (!info) return false;
+    return paging_translate(info->root_pml4_phys, virt, out_phys);
+}
+
+
 
 static inline void _outb(uint16_t port, uint8_t  v) { __asm__ volatile("outb %0,%1"::"a"(v),"Nd"(port)); }
 static inline void _outw(uint16_t port, uint16_t v) { __asm__ volatile("outw %0,%1"::"a"(v),"Nd"(port)); }
@@ -47,7 +55,7 @@ static inline uint32_t _inl(uint16_t port) { uint32_t v; __asm__ volatile("inl %
 
  // VirtIO PCI IDs
 
- #define VIRTIO_VENDOR_ID        0x1AF4u
+#define VIRTIO_VENDOR_ID        0x1AF4u
 #define VIRTIO_DEV_BLOCK_LEGACY 0x1001u   /* transitional / legacy */
 #define VIRTIO_DEV_BLOCK_MODERN 0x1042u   /* virtio 1.0+ only      */
 
@@ -69,15 +77,11 @@ static inline uint32_t _inl(uint16_t port) { uint32_t v; __asm__ volatile("inl %
 #define VIRTIO_PAGE_SIZE  4096u
 #define VIRTIO_PAGE_SHIFT 12u
 
-/* -----------------------------------------------------------------------
- * Single global device instance (extend to an array when needed)
- * ----------------------------------------------------------------------- */
+
 static virtio_blk_dev_t g_virtio_blk;
 static bool             g_virtio_blk_ready = false;
 
-/* -----------------------------------------------------------------------
- * PCI helper: enable bus-mastering + I/O space in command register
- * ----------------------------------------------------------------------- */
+
 static void pci_enable_device(pci_device_t *dev) {
     /*
      * We need to write back to PCI config space.
@@ -100,16 +104,8 @@ static void pci_enable_device(pci_device_t *dev) {
     __asm__ volatile("outl %0, %1" :: "a"(cmd),          "Nd"((uint16_t)0xCFC));
 }
 
-/* -----------------------------------------------------------------------
- * Virtqueue setup
- *
- * Legacy VirtIO uses a single contiguous physically-aligned buffer for the
- * three virtqueue regions (desc, avail, used) and tells the device its
- * page-frame number via VIRTIO_PCI_QUEUE_PFN.
- *
- * Layout (all within one VIRTIO_PAGE_SIZE-aligned allocation):
- *   [ descriptor table ][ avail ring ][ padding ][ used ring ]
- * ----------------------------------------------------------------------- */
+
+
 
 /* Size helpers from the spec */
 static inline size_t vq_desc_size (uint16_t qs) { return 16u * qs; }
@@ -177,7 +173,12 @@ static bool virtq_setup(virtio_blk_dev_t *dev) {
      * block with a proper paging_translate(virt_aligned) call once that
      * function is available.
      */
-    uint64_t phys_base = virt_aligned - g_hhdm_offset;
+
+    uint64_t phys_base = 0;
+    if (!virt_to_phys(virt_aligned, &phys_base)) {
+        printk("[virtio_blk] failed to translate virtqueue VA to PA\n");
+        return false;
+    }
 
     /* Zero the entire region */
     memset((void *)virt_aligned, 0, total_bytes);
@@ -208,9 +209,8 @@ static bool virtq_setup(virtio_blk_dev_t *dev) {
     return true;
 }
 
-/* -----------------------------------------------------------------------
- * Initialisation
- * ----------------------------------------------------------------------- */
+
+
 bool virtio_blk_init(void) {
     /* Step 1 — locate the device on the PCI bus */
     pci_device_t *pci = pci_find_by_id(VIRTIO_VENDOR_ID, VIRTIO_DEV_BLOCK_LEGACY);
@@ -326,9 +326,13 @@ bool virtio_blk_read(uint64_t sector, uint32_t count, void *buf) {
      *
      * TODO: add scatter-gather support when buf spans multiple pages.
      */
-    uint64_t hdr_phys    = (uint64_t)(uintptr_t)&hdr    - g_hhdm_offset;
-    uint64_t buf_phys    = (uint64_t)(uintptr_t)buf      - g_hhdm_offset;
-    uint64_t status_phys = (uint64_t)(uintptr_t)&status  - g_hhdm_offset;
+    uint64_t hdr_phys = 0, buf_phys = 0, status_phys = 0;
+    if (!virt_to_phys((uint64_t)(uintptr_t)&hdr,    &hdr_phys)    ||
+        !virt_to_phys((uint64_t)(uintptr_t)buf,      &buf_phys)    ||
+        !virt_to_phys((uint64_t)(uintptr_t)&status,  &status_phys)) {
+        printk("[virtio_blk] failed to translate DMA buffers\n");
+        return false;
+    }
 
     /* Grab 3 descriptors from the free list */
     if (dev->free_head + 3 > dev->queue_size) {
@@ -402,9 +406,13 @@ bool virtio_blk_write(uint64_t sector, uint32_t count, const void *buf) {
     };
     volatile uint8_t status = 0xFF;
 
-    uint64_t hdr_phys    = (uint64_t)(uintptr_t)&hdr   - g_hhdm_offset;
-    uint64_t buf_phys    = (uint64_t)(uintptr_t)buf     - g_hhdm_offset;
-    uint64_t status_phys = (uint64_t)(uintptr_t)&status - g_hhdm_offset;
+    uint64_t hdr_phys = 0, buf_phys = 0, status_phys = 0;
+    if (!virt_to_phys((uint64_t)(uintptr_t)&hdr,    &hdr_phys)    ||
+        !virt_to_phys((uint64_t)(uintptr_t)buf,      &buf_phys)    ||
+        !virt_to_phys((uint64_t)(uintptr_t)&status,  &status_phys)) {
+        printk("[virtio_blk] failed to translate DMA buffers\n");
+        return false;
+    }
 
     uint16_t d0 = dev->free_head;
     uint16_t d1 = dev->desc[d0].next;
