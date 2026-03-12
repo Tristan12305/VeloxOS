@@ -48,6 +48,7 @@ void read_lba(){
 
     if(!virtio_blk_read(1, 1, sector)){
         printk("[GPT-Part] Could not read LBA1\n"); 
+        return;
     }
     printk("[gpt] read returned successfully\n");
 
