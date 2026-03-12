@@ -14,7 +14,7 @@ void printk_init(void);
  * Scrolls up by one text row when the cursor reaches the bottom.          */
 void printk(const char *fmt, ...);
 
-void clearScreen();
+void clear_screen();
 
 void printk_hex8(uint8_t value);
 
