@@ -60,11 +60,9 @@ void kmain(void){
                (unsigned long long)lapic->apic_base_phys);
         printk("Interrupts enabled. Waiting for IRQs...\n");
 
-        sti();
         virtio_blk_init();
-        printk("virtio finished successfully\n");
-        read_lba();
-        printk("read_lba function done\n");
+
+        sti();
 
         for (;;) {
                 hlt();

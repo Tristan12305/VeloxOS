@@ -2,17 +2,8 @@
 
 #include <stdarg.h>
 #include <stdint.h>
-/*
- * printk.h
- *
- * Minimal kernel text output to the Limine framebuffer.
- *
- * Call printk_init() once after limine_init(), then use printk() freely.
- *
- * printk() supports basic printf-style format specifiers:
- *   %d %i %u %x %X %p %s %c %%
- * Integer length modifiers: %ld/%lu and %lld/%llu.
- */
+
+
 
 /* Initialise the console using the framebuffer in g_framebuffer.
  * Clears the screen and resets the cursor to (0, 0).                      */
@@ -26,3 +17,5 @@ void printk(const char *fmt, ...);
 void clearScreen();
 
 void printk_hex8(uint8_t value);
+
+uint16_t* handoff_framebuffer();

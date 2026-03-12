@@ -390,3 +390,8 @@ void printk_hex8(uint8_t value) {
     char lo = digits[value & 0x0F];
     printk("%c%c", hi, lo);
 }
+
+uint16_t* handoff_framebuffer(){
+    uint16_t *buf = &fb_ptr;
+    return buf;  
+}

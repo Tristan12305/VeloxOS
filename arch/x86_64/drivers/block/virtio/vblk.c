@@ -18,9 +18,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-/* -----------------------------------------------------------------------
- * Primary ATA bus I/O ports
- * ----------------------------------------------------------------------- */
+
 #define ATA_DATA        0x1F0   /* 16-bit data register                     */
 #define ATA_ERROR       0x1F1   /* error register (read)                    */
 #define ATA_FEATURES    0x1F1   /* features register (write)                */
@@ -43,17 +41,12 @@
 #define ATA_CMD_IDENTIFY    0xEC
 #define ATA_CMD_FLUSH       0xE7
 
-/* -----------------------------------------------------------------------
- * Port I/O helpers
- * ----------------------------------------------------------------------- */
+
 static inline void     _outb(uint16_t p, uint8_t  v){ __asm__ volatile("outb %0,%1"::"a"(v),"Nd"(p)); }
 static inline void     _outw(uint16_t p, uint16_t v){ __asm__ volatile("outw %0,%1"::"a"(v),"Nd"(p)); }
 static inline uint8_t  _inb (uint16_t p){ uint8_t  v; __asm__ volatile("inb %1,%0":"=a"(v):"Nd"(p)); return v; }
 static inline uint16_t _inw (uint16_t p){ uint16_t v; __asm__ volatile("inw %1,%0":"=a"(v):"Nd"(p)); return v; }
 
-/* -----------------------------------------------------------------------
- * Internal helpers
- * ----------------------------------------------------------------------- */
 
 /* Wait until the drive clears BSY. Returns false on timeout or no drive. */
 static bool ata_wait_ready(void) {
@@ -94,14 +87,10 @@ static void ata_setup_lba28(uint32_t lba, uint8_t count, uint8_t cmd) {
     _outb(ATA_COMMAND, cmd);
 }
 
-/* -----------------------------------------------------------------------
- * Driver state
- * ----------------------------------------------------------------------- */
+
 static bool g_ata_ready = false;
 
-/* -----------------------------------------------------------------------
- * virtio_blk_init — detect and identify the primary master ATA drive
- * ----------------------------------------------------------------------- */
+
 bool virtio_blk_init(void) {
     printk("[ata] initialising primary master...\n");
 
@@ -148,9 +137,6 @@ bool virtio_blk_init(void) {
     return true;
 }
 
-/* -----------------------------------------------------------------------
- * virtio_blk_read — read `count` sectors starting at `sector` into `buf`
- * ----------------------------------------------------------------------- */
 bool virtio_blk_read(uint64_t sector, uint32_t count, void *buf) {
     if (!g_ata_ready) {
         printk("[ata] read: driver not ready\n");
@@ -184,9 +170,7 @@ bool virtio_blk_read(uint64_t sector, uint32_t count, void *buf) {
     return true;
 }
 
-/* -----------------------------------------------------------------------
- * virtio_blk_write — write `count` sectors from `buf` starting at `sector`
- * ----------------------------------------------------------------------- */
+
 bool virtio_blk_write(uint64_t sector, uint32_t count, const void *buf) {
     if (!g_ata_ready) {
         printk("[ata] write: driver not ready\n");
