@@ -41,6 +41,11 @@ add_executable(kernel.elf
     fs/partition/gpt.c
     lib/string.c
     mm/kmalloc.c
+    arch/x86_64/lib/spinlock.S
+    kernel/cpu.c
+    kernel/acpi.c
+    kernel/memory.c
+    arch/x86_64/init.c
 
 )
 

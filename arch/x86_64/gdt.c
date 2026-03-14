@@ -70,4 +70,5 @@ extern void x86_loadGDT(gDescriptor* descriptor, uint16_t codeSegment, uint16_t 
 
 void x86_initGDT() {
     x86_loadGDT(&gdtDescriptor, X86_GDT_CODE_SEGMENT, X86_GDT_DATA_SEGMENT);
+    
 }

@@ -8,7 +8,7 @@ global spin_unlock
 
 spin_lock:
     lock bts [rdi],0
-    jc spin_with_pause
+    jc .spin_with_pause
     ret
 
 .spin_with_pause:

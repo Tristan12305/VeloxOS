@@ -21,10 +21,30 @@
 #include <include/libk.h>
 #include <arch/x86_64/cpu/percpu.h>
 #include <arch/x86_64/cpu/vendor.h>
+#include <kernel/init.h>
+
+__attribute__((noreturn))
+void kmain(void){
+
+        arch_early_init();
+        mem_init();
+        arch_cpu_init();
+        arch_acpi_init();
+        arch_irq_init();
+
+
+        virtio_blk_init();
+        gpt_init();
+
+
+        arch_idle();
+        
+}
 
 
 
 
+/*
 
 __attribute__((noreturn))
 void kmain(void){
@@ -83,3 +103,4 @@ void kmain(void){
                 hlt();
         }
 }
+*/
