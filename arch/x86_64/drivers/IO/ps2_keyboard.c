@@ -27,7 +27,7 @@ static void ps2_keyboard_irq(interrupt_frame *frame) {
 
     bool release = (scancode & 0x80U) != 0;
     uint8_t code = scancode & 0x7FU;
-
+    
     printk("[kbd] %s scancode=0x", release ? "break" : "make");
     printk_hex8(code);
     if (e0_prefix) {

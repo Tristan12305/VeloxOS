@@ -11,6 +11,17 @@
 #include <stddef.h>
 #include <stdint.h>
 
+
+/*3. vfree requires the caller to pass the original size.
+This is the fundamental interface difference from free(). Every caller has to track the size of their vmalloc allocation separately. 
+It's not a bug, but it makes vmalloc harder to compose — which is why kmalloc stores its size in a header. 
+For vmalloc, you could store a size_t in a header page (or use a separate lookup table keyed on the start address) 
+to eventually make vfree(ptr) work without a size argument.
+4. No guard pages between vmalloc regions.
+Adjacent vmalloc allocations sit directly next to each other in virtual memory. 
+A buffer overrun in one vmalloc region will silently walk into the next allocation's data with no fault. 
+Inserting one unmapped guard page between allocations would turn those overruns into immediate page faults. Cheap to add, high diagnostic value.*/
+
 #define VMALLOC_DEFAULT_SIZE (256ULL * 1024ULL * 1024ULL)
 #define VMALLOC_MAX_RANGES 128
 

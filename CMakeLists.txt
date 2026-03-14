@@ -21,7 +21,6 @@ add_executable(kernel.elf
     boot/boot.c
     include/printk.c
     kernel/panic.c
-    kernel/drivers.c
     mm/paging.c
     mm/paging.S
     mm/pmm.c
@@ -41,6 +40,7 @@ add_executable(kernel.elf
     arch/x86_64/drivers/block/virtio/vblk.c
     fs/partition/gpt.c
     lib/string.c
+    mm/kmalloc.c
 
 )
 

@@ -2,6 +2,8 @@
 
 #include "pmm.h"
 
+
+
 #include <include/printk.h>
 #include <kernel/panic.h>
 
@@ -103,18 +105,29 @@ static uint64_t alloc_table_page(void) {
     return table_phys;
 }
 
-static uint64_t get_or_create_table(uint64_t* parent_table, uint16_t index) {
+static uint64_t get_or_create_table(uint64_t* parent_table, uint16_t index, bool user) {
     uint64_t entry = parent_table[index];
 
     if ((entry & PAGE_PRESENT) != 0) {
         if ((entry & PAGE_PS) != 0) {
-            panic("Paging init failed: unexpected huge-page entry in table walk");
+            panic("Paging: huge-page entry in intermediate table walk");
+        }
+        /* Retrofit PAGE_USER if this table is being used for a user mapping
+         * but was originally created as a kernel-only entry.  x86-64 requires
+         * PAGE_USER on every intermediate level for CPL-3 access to reach the
+         * PTE — even if the PTE itself has PAGE_USER set.                    */
+        if (user && !(entry & PAGE_USER)) {
+            parent_table[index] = entry | PAGE_USER;
         }
         return entry & ENTRY_ADDR_MASK_4K;
     }
 
     uint64_t child_phys = alloc_table_page();
-    parent_table[index] = child_phys | PAGE_PRESENT | PAGE_WRITABLE;
+    uint64_t new_entry = child_phys | PAGE_PRESENT | PAGE_WRITABLE;
+    if (user) {
+        new_entry |= PAGE_USER;
+    }
+    parent_table[index] = new_entry;
     return child_phys;
 }
 
@@ -152,71 +165,33 @@ static bool walk_to_pte(uint64_t root_pml4_phys,
 
     uint64_t* pml4 = table_virt_from_phys(root_pml4_phys & ENTRY_ADDR_MASK_4K);
     uint16_t l4 = pml4_index(virt_addr);
-    uint64_t pml4e = pml4[l4];
-    if ((pml4e & PAGE_PRESENT) == 0) {
-        if (!create) {
-            return false;
-        }
-        uint64_t child_phys = alloc_table_page();
-        pml4e = child_phys | PAGE_PRESENT | PAGE_WRITABLE;
-        if (user) {
-            pml4e |= PAGE_USER;
-        }
-        pml4[l4] = pml4e;
-    } else if (user && ((pml4e & PAGE_USER) == 0)) {
-        pml4e |= PAGE_USER;
-        pml4[l4] = pml4e;
-    }
 
-    if ((pml4e & PAGE_PS) != 0) {
+    if (!(pml4[l4] & PAGE_PRESENT) && !create) {
         return false;
     }
+    uint64_t pdpt_phys = get_or_create_table(pml4, l4, user);
 
-    uint64_t* pdpt = table_virt_from_phys(pml4e & ENTRY_ADDR_MASK_4K);
+    uint64_t* pdpt = table_virt_from_phys(pdpt_phys);
     uint16_t l3 = pdpt_index(virt_addr);
-    uint64_t pdpte = pdpt[l3];
-    if ((pdpte & PAGE_PRESENT) == 0) {
-        if (!create) {
-            return false;
-        }
-        uint64_t child_phys = alloc_table_page();
-        pdpte = child_phys | PAGE_PRESENT | PAGE_WRITABLE;
-        if (user) {
-            pdpte |= PAGE_USER;
-        }
-        pdpt[l3] = pdpte;
-    } else if (user && ((pdpte & PAGE_USER) == 0)) {
-        pdpte |= PAGE_USER;
-        pdpt[l3] = pdpte;
+    if (pdpt[l3] & PAGE_PS) {
+        return false; /* 1 GiB page — can't walk to a 4 KiB PTE inside it */
     }
-
-    if ((pdpte & PAGE_PS) != 0) {
+    if (!(pdpt[l3] & PAGE_PRESENT) && !create) {
         return false;
     }
+    uint64_t pd_phys = get_or_create_table(pdpt, l3, user);
 
-    uint64_t* pd = table_virt_from_phys(pdpte & ENTRY_ADDR_MASK_4K);
+    uint64_t* pd = table_virt_from_phys(pd_phys);
     uint16_t l2 = pd_index(virt_addr);
-    uint64_t pde = pd[l2];
-    if ((pde & PAGE_PRESENT) == 0) {
-        if (!create) {
-            return false;
-        }
-        uint64_t child_phys = alloc_table_page();
-        pde = child_phys | PAGE_PRESENT | PAGE_WRITABLE;
-        if (user) {
-            pde |= PAGE_USER;
-        }
-        pd[l2] = pde;
-    } else if (user && ((pde & PAGE_USER) == 0)) {
-        pde |= PAGE_USER;
-        pd[l2] = pde;
+    if (pd[l2] & PAGE_PS) {
+        return false; /* 2 MiB page — can't walk to a 4 KiB PTE inside it */
     }
-
-    if ((pde & PAGE_PS) != 0) {
+    if (!(pd[l2] & PAGE_PRESENT) && !create) {
         return false;
     }
+    uint64_t pt_phys = get_or_create_table(pd, l2, user);
 
-    uint64_t* pt = table_virt_from_phys(pde & ENTRY_ADDR_MASK_4K);
+    uint64_t* pt = table_virt_from_phys(pt_phys);
     *out_pte = &pt[pt_index(virt_addr)];
     return true;
 }
@@ -246,9 +221,10 @@ static void map_page_2m(uint64_t root_pml4_phys,
     }
 
     uint64_t* pml4 = table_virt_from_phys(root_pml4_phys);
-    uint64_t pdpt_phys = get_or_create_table(pml4, pml4_index(virt_addr));
+    uint64_t pdpt_phys = get_or_create_table(pml4, pml4_index(virt_addr), false);
     uint64_t* pdpt = table_virt_from_phys(pdpt_phys);
-    uint64_t pd_phys = get_or_create_table(pdpt, pdpt_index(virt_addr));
+    uint64_t pd_phys = get_or_create_table(pdpt, pdpt_index(virt_addr), false);
+
     uint64_t* pd = table_virt_from_phys(pd_phys);
 
     pd[pd_index(virt_addr)] =
@@ -264,9 +240,9 @@ static void map_page_4k(uint64_t root_pml4_phys,
     }
 
     uint64_t* pml4 = table_virt_from_phys(root_pml4_phys);
-    uint64_t pdpt_phys = get_or_create_table(pml4, pml4_index(virt_addr));
+    uint64_t pdpt_phys = get_or_create_table(pml4, pml4_index(virt_addr), false);
     uint64_t* pdpt = table_virt_from_phys(pdpt_phys);
-    uint64_t pd_phys = get_or_create_table(pdpt, pdpt_index(virt_addr));
+    uint64_t pd_phys = get_or_create_table(pdpt, pdpt_index(virt_addr), false);
     uint64_t* pd = table_virt_from_phys(pd_phys);
 
     uint64_t pd_entry = pd[pd_index(virt_addr)];
@@ -274,7 +250,7 @@ static void map_page_4k(uint64_t root_pml4_phys,
         panic("Paging init failed: 4 KiB mapping conflicts with 2 MiB mapping");
     }
 
-    uint64_t pt_phys = get_or_create_table(pd, pd_index(virt_addr));
+    uint64_t pt_phys = get_or_create_table(pd, pd_index(virt_addr), false);
     uint64_t* pt = table_virt_from_phys(pt_phys);
 
     pt[pt_index(virt_addr)] = (phys_addr & ENTRY_ADDR_MASK_4K) | flags | PAGE_PRESENT;
@@ -595,11 +571,25 @@ bool paging_map_page(uint64_t root_pml4_phys, uint64_t virt_addr, uint64_t phys_
         return false;
     }
 
+    /* GLOBAL and USER are mutually exclusive: GLOBAL suppresses TLB flushes
+     * on CR3 switches, so a GLOBAL user page would persist into other
+     * address spaces and could be accessed by the wrong process.           */
+    if ((flags & PAGING_FLAG_GLOBAL) && (flags & PAGING_FLAG_USER)) {
+        printk("[paging] paging_map_page: GLOBAL+USER flags are mutually exclusive "
+               "(virt=0x%llx)\n", (unsigned long long)virt_addr);
+        return false;
+    }
+
+    /* Reject any remapping attempt — the caller must unmap first, or use
+     * paging_protect_page() to change flags on an existing mapping.
+     * Silently changing flags on a live mapping is a security/correctness
+     * hazard that is much harder to debug than an explicit failure here.   */
     uint64_t existing_phys = 0;
     if (translate_with_cr3(root_pml4_phys, virt_addr, &existing_phys)) {
-        if (align_down(existing_phys, PAGE_SIZE_4K) != phys_addr) {
-            return false;
-        }
+        printk("[paging] paging_map_page: virt=0x%llx already mapped to phys=0x%llx\n",
+               (unsigned long long)virt_addr,
+               (unsigned long long)(existing_phys & ENTRY_ADDR_MASK_4K));
+        return false;
     }
 
     uint64_t* pte = NULL;
@@ -613,6 +603,7 @@ bool paging_map_page(uint64_t root_pml4_phys, uint64_t virt_addr, uint64_t phys_
     paging_invlpg(virt_addr);
     return true;
 }
+
 
 bool paging_map_range(uint64_t root_pml4_phys,
                       uint64_t virt_addr,
@@ -643,6 +634,76 @@ bool paging_map_range(uint64_t root_pml4_phys,
     return true;
 }
 
+
+/* Returns true if all 512 entries in the table at table_phys are zero. */
+static bool is_table_empty(uint64_t table_phys) {
+    const uint64_t* table = table_virt_from_phys(table_phys);
+    for (size_t i = 0; i < 512; i++) {
+        if (table[i] != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* After a PTE has been zeroed, walk back up the four levels and free any
+ * intermediate page-table pages that are now completely empty.
+ * Stops at the PML4 itself — that is never freed here.                    */
+static void free_empty_tables(uint64_t root_pml4_phys, uint64_t virt_addr) {
+    uint64_t* pml4 = table_virt_from_phys(root_pml4_phys & ENTRY_ADDR_MASK_4K);
+    uint16_t l4 = pml4_index(virt_addr);
+    uint64_t pml4e = pml4[l4];
+    if (!(pml4e & PAGE_PRESENT) || (pml4e & PAGE_PS)) {
+        return;
+    }
+
+    uint64_t pdpt_phys = pml4e & ENTRY_ADDR_MASK_4K;
+    uint64_t* pdpt = table_virt_from_phys(pdpt_phys);
+    uint16_t l3 = pdpt_index(virt_addr);
+    uint64_t pdpte = pdpt[l3];
+    if (!(pdpte & PAGE_PRESENT) || (pdpte & PAGE_PS)) {
+        return;
+    }
+
+    uint64_t pd_phys = pdpte & ENTRY_ADDR_MASK_4K;
+    uint64_t* pd = table_virt_from_phys(pd_phys);
+    uint16_t l2 = pd_index(virt_addr);
+    uint64_t pde = pd[l2];
+    if (!(pde & PAGE_PRESENT) || (pde & PAGE_PS)) {
+        return;
+    }
+
+    uint64_t pt_phys = pde & ENTRY_ADDR_MASK_4K;
+
+    /* Level 1 (PT): free if empty */
+    if (is_table_empty(pt_phys)) {
+        pmm_free_page_phys(pt_phys);
+        g_paging_info.table_pages_allocated--;
+        pd[l2] = 0;
+
+        /* Level 2 (PD): free if now empty */
+        if (is_table_empty(pd_phys)) {
+            pmm_free_page_phys(pd_phys);
+            g_paging_info.table_pages_allocated--;
+            pdpt[l3] = 0;
+
+            /* Level 3 (PDPT): free if now empty */
+            if (is_table_empty(pdpt_phys)) {
+                pmm_free_page_phys(pdpt_phys);
+                g_paging_info.table_pages_allocated--;
+                pml4[l4] = 0;
+                /* PML4 itself is never freed here — it lives for the
+                 * lifetime of the address space.                         */
+            }
+        }
+    }
+}
+
+
+
+
+
+
 bool paging_unmap_page(uint64_t root_pml4_phys, uint64_t virt_addr, uint64_t* out_phys_addr) {
     uint64_t* pte = NULL;
     if (!walk_to_pte(root_pml4_phys, virt_addr, false, false, &pte)) {
@@ -655,35 +716,20 @@ bool paging_unmap_page(uint64_t root_pml4_phys, uint64_t virt_addr, uint64_t* ou
     }
 
     if (out_phys_addr) {
-        *out_phys_addr = (entry & ENTRY_ADDR_MASK_4K) | (virt_addr & (PAGE_SIZE_4K - 1));
+        /* Return the physical page base address only — never mix in virtual
+         * offset bits, as pmm_free_page_phys() requires page-aligned input
+         * and will silently drop non-aligned addresses.                    */
+        *out_phys_addr = entry & ENTRY_ADDR_MASK_4K;
     }
 
     *pte = 0;
     paging_invlpg(virt_addr);
+
+    /* Walk back up the table hierarchy and free any levels that are now
+     * completely empty, returning those physical pages to the PMM.        */
+    free_empty_tables(root_pml4_phys, virt_addr);
+
     return true;
-}
-
-bool paging_unmap_range(uint64_t root_pml4_phys, uint64_t virt_addr, uint64_t size) {
-    if (size == 0) {
-        return false;
-    }
-
-    if (virt_addr > UINT64_MAX - size) {
-        return false;
-    }
-
-    uint64_t aligned = align_up(size, PAGE_SIZE_4K);
-    if (aligned < size) {
-        return false;
-    }
-    bool ok = true;
-    for (uint64_t offset = 0; offset < aligned; offset += PAGE_SIZE_4K) {
-        if (!paging_unmap_page(root_pml4_phys, virt_addr + offset, NULL)) {
-            ok = false;
-        }
-    }
-
-    return ok;
 }
 
 bool paging_protect_page(uint64_t root_pml4_phys, uint64_t virt_addr, uint64_t flags) {

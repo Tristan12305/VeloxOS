@@ -1,5 +1,16 @@
 #include "pmm.h"
 
+/*1. O(n) linear scan — already deferred, but note the real cost. 
+Every kmalloc call that crosses a pool boundary will eventually bottom out here. With 4 GiB of RAM, that's ~1 million bits to scan worst-case. 
+A simple fix later is a 64-bit word-level scan (__builtin_ctzll on inverted bitmap words),
+ which cuts the constant by 64× without changing the allocator structure.*/
+
+/*2. pmm_alloc_page() returns a virtual address silently. 
+The function name suggests it returns a page, but it actually returns the HHDM virtual address of that page. 
+Meanwhile pmm_alloc_page_phys() returns the physical address. 
+This asymmetry is a trap — the naming convention should be enforced more clearly, especially as you add more callers.*/
+
+
 #include <kernel/panic.h>
 
 extern uint64_t g_hhdm_offset;

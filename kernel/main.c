@@ -18,7 +18,7 @@
 #include <arch/x86_64/drivers/block/pci.h>
 #include <arch/x86_64/drivers/block/virtio/vblk.h>
 #include <fs/partition/gpt.h>
-
+#include <include/libk.h>
 
 
 
@@ -59,8 +59,19 @@ void kmain(void){
                lapic->apic_id,
                (unsigned long long)lapic->apic_base_phys);
         printk("Interrupts enabled. Waiting for IRQs...\n");
-
+        kmalloc_init();
         virtio_blk_init();
+        gpt_init();
+
+        int *buffer = kmalloc(256);
+        if (!buffer){
+                printk("failed allocation with kmalloc\n");
+        }
+        else{
+                *buffer = 123;
+                printk("%i\n", buffer);
+                kfree(buffer);
+        }
 
         sti();
 
