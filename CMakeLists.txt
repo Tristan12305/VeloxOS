@@ -48,6 +48,7 @@ set_source_files_properties(
     mm/paging.S
     arch/x86_64/gdt.S
     arch/x86_64/idt.S
+    arch/x86_64/lib/spinlock.S
     PROPERTIES LANGUAGE ASM_NASM
 )
 

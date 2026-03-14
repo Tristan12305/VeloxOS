@@ -19,6 +19,9 @@
 #include <arch/x86_64/drivers/block/virtio/vblk.h>
 #include <fs/partition/gpt.h>
 #include <include/libk.h>
+#include <arch/x86_64/cpu/percpu.h>
+#include <arch/x86_64/cpu/vendor.h>
+
 
 
 
@@ -36,7 +39,8 @@ void kmain(void){
         madt_init();
         pci_enumerate();
         vmalloc_init();
-        if (!x86_lapic_init()) {
+        cpuid_get_info(&g_cpus[0].cpu_info);
+        if (!x86_lapic_bsp_init()) {
                 panic("LAPIC init failed");
         }
         if (!x86_ioapic_init()) {

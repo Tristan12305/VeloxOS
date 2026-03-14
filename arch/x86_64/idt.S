@@ -1,12 +1,10 @@
 bits 64
 
-; isr_stubs.asm
-; ISR stubs for x86-64 IDT
+
 
 section .text
 
-; Macro for exceptions WITHOUT an error code
-; We push a dummy 0 to keep the stack frame uniform
+
 %macro isr_no_err 1
 isr_stub_%+%1:
     push    0               ; dummy error code
@@ -65,7 +63,7 @@ isr_no_err i
 %endrep
 
 	; Common stub: save all registers, call C handler, restore, iretq
-	extern isr_handler     ; your C handler
+	extern isr_handler     ; 
 	isr_common_stub:
     ; At this point the stack looks like (top = rsp):
     ;   [vector]        <- we pushed this
@@ -89,20 +87,19 @@ isr_no_err i
     push    r10
     push    r11
     push    r12
-	    push    r13
-	    push    r14
-	    push    r15
-
-	    ; C code expects DF=0 and ABI-aligned stack.
-	    cld
-	    mov     rdi, rsp        ; pass pointer to software frame
-	    mov     rax, rsp        ; keep original frame pointer for restore
-	    and     rsp, -16
-	    sub     rsp, 8
-	    push    rax
-	    call    isr_handler
-	    pop     rax
-	    mov     rsp, rax
+	push    r13
+	push    r14
+	push    r15
+	; C code expects DF=0 and ABI-aligned stack.
+	cld
+	mov     rdi, rsp        ; pass pointer to software frame
+	mov     rax, rsp        ; keep original frame pointer for restore
+	and     rsp, -16
+	sub     rsp, 8
+	push    rax
+	call    isr_handler
+	pop     rax
+	mov     rsp, rax
 
     pop     r15
     pop     r14
@@ -123,7 +120,6 @@ isr_no_err i
     add     rsp, 16         ; pop vector number + error code
     iretq                   ; return from interrupt (64-bit)
 
-; Export the table of stub pointers
 section .data
 global isr_stub_table
 isr_stub_table:
