@@ -56,6 +56,37 @@ static inline uint64_t rdmsr_u64(uint32_t msr) {
     return ((uint64_t)hi << 32) | lo;
 }
 
+static inline uint64_t rdtsc_u64(void) {
+    uint32_t lo, hi;
+    __asm__ volatile ("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+
+static uint64_t tsc_hz_from_cpuid(void) {
+    uint32_t eax, ebx, ecx, edx;
+    __cpuid(0, eax, ebx, ecx, edx);
+    uint32_t max_leaf = eax;
+
+    if (max_leaf >= 0x15U) {
+        __cpuid_count(0x15U, 0, eax, ebx, ecx, edx);
+        if (eax != 0 && ebx != 0) {
+            uint64_t crystal = ecx;
+            if (crystal != 0) {
+                return (uint64_t)crystal * (uint64_t)ebx / (uint64_t)eax;
+            }
+        }
+    }
+
+    if (max_leaf >= 0x16U) {
+        __cpuid(0x16U, eax, ebx, ecx, edx);
+        if (eax != 0) {
+            return (uint64_t)eax * 1000000ULL;
+        }
+    }
+
+    return 0;
+}
+
 static inline void wrmsr_u64(uint32_t msr, uint64_t value) {
     __asm__ volatile ("wrmsr"
                       :: "c"(msr), "a"((uint32_t)value), "d"((uint32_t)(value >> 32))
@@ -358,6 +389,60 @@ void x86_lapic_timer_stop(void) {
 
 uint64_t x86_lapic_timer_ticks(void) {
     return cpu_self()->lapic_timer_ticks;
+}
+
+bool x86_lapic_timer_calibrate(uint32_t target_hz, uint32_t *out_initial_count) {
+    if (!out_initial_count || target_hz == 0) {
+        return false;
+    }
+
+    cpu_t *cpu = cpu_self();
+    lapic_info_t *l = &cpu->lapic;
+    if (!l->initialized) {
+        return false;
+    }
+
+    uint64_t tsc_hz = tsc_hz_from_cpuid();
+    if (tsc_hz == 0) {
+        return false;
+    }
+
+    uint32_t old_lvt = lapic_read_reg(l, LAPIC_REG_LVT_TIMER);
+    uint32_t old_div = lapic_read_reg(l, LAPIC_REG_TIMER_DIVCONF);
+    uint32_t old_init = lapic_read_reg(l, LAPIC_REG_TIMER_INITCNT);
+
+    lapic_write_reg(l, LAPIC_REG_TIMER_DIVCONF, LAPIC_TIMER_DIVIDE_BY_16);
+    lapic_write_reg(l, LAPIC_REG_LVT_TIMER, LAPIC_LVT_MASKED);
+    lapic_write_reg(l, LAPIC_REG_TIMER_INITCNT, 0xFFFFFFFFU);
+
+    uint64_t tsc_start = rdtsc_u64();
+    uint64_t wait_tsc = tsc_hz / 100U; // 10ms sample
+    if (wait_tsc == 0) {
+        wait_tsc = 1;
+    }
+    while ((rdtsc_u64() - tsc_start) < wait_tsc) {
+        __asm__ volatile ("pause");
+    }
+
+    uint32_t cur = lapic_read_reg(l, LAPIC_REG_TIMER_CURRCNT);
+    uint32_t elapsed = 0xFFFFFFFFU - cur;
+
+    lapic_write_reg(l, LAPIC_REG_TIMER_INITCNT, old_init);
+    lapic_write_reg(l, LAPIC_REG_LVT_TIMER, old_lvt);
+    lapic_write_reg(l, LAPIC_REG_TIMER_DIVCONF, old_div);
+
+    if (elapsed == 0) {
+        return false;
+    }
+
+    uint64_t ticks_per_sec = (uint64_t)elapsed * tsc_hz / wait_tsc;
+    uint32_t init = (uint32_t)(ticks_per_sec / target_hz);
+    if (init == 0) {
+        init = 1;
+    }
+
+    *out_initial_count = init;
+    return true;
 }
 
 

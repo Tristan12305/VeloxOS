@@ -2,17 +2,16 @@
 #include "vmalloc.h"
 
 #include <include/printk.h>
+#include <include/spinlock.h>
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
 
-/* Each pool chunk requested from vmalloc.  4 MiB gives plenty of room for
- * typical kernel use while keeping page-table overhead low.              */
+
 #define KMALLOC_POOL_SIZE   (4ULL * 1024ULL * 1024ULL)
 
-/* All returned pointers are aligned to this boundary.                    */
 #define KMALLOC_ALIGN       16UL
 
 /* Minimum leftover size (including a new header) that justifies splitting
@@ -59,13 +58,13 @@ _Static_assert(sizeof(kmalloc_block_t) % KMALLOC_ALIGN == 0,
 
 static kmalloc_block_t *g_free_list   = NULL;
 static bool             g_initialized = false;
+static spinlock_t       g_kmalloc_lock = SPINLOCK_INIT;
 
 
 static inline size_t align_up_sz(size_t v, size_t a) {
     return (v + a - 1) & ~(a - 1);
 }
 
-/* Insert a block at the head of the free list. */
 static void free_list_insert(kmalloc_block_t *b) {
     b->free      = 1;
     b->magic     = KMALLOC_MAGIC_FREE;
@@ -77,7 +76,6 @@ static void free_list_insert(kmalloc_block_t *b) {
     g_free_list = b;
 }
 
-/* Remove a block from the free list (it is about to be handed out). */
 static void free_list_remove(kmalloc_block_t *b) {
     if (b->prev_free) {
         b->prev_free->next_free = b->next_free;
@@ -110,18 +108,23 @@ static bool expand_pool(void) {
     return true;
 }
 
-
-
-void kmalloc_init(void) {
+static bool kmalloc_init_locked(void) {
     if (g_initialized) {
-        return;
+        return true;
     }
     if (!expand_pool()) {
         printk("[kmalloc] init failed\n");
-        return;
+        return false;
     }
     g_initialized = true;
     printk("[kmalloc] ready\n");
+    return true;
+}
+
+void kmalloc_init(void) {
+    uint64_t flags = spin_lock_irqsave(&g_kmalloc_lock);
+    (void)kmalloc_init_locked();
+    spin_unlock_irqrestore(&g_kmalloc_lock, flags);
 }
 
 void *kmalloc(size_t size) {
@@ -129,14 +132,12 @@ void *kmalloc(size_t size) {
         return NULL;
     }
 
-    if (!g_initialized) {
-        kmalloc_init();
-        if (!g_initialized) {
-            return NULL;
-        }
+    uint64_t flags = spin_lock_irqsave(&g_kmalloc_lock);
+    if (!kmalloc_init_locked()) {
+        spin_unlock_irqrestore(&g_kmalloc_lock, flags);
+        return NULL;
     }
 
-    
     size = align_up_sz(size, KMALLOC_ALIGN);
 
     /* Two attempts: first with the current pool, then after expansion.   */
@@ -168,6 +169,7 @@ void *kmalloc(size_t size) {
             free_list_remove(b);
             b->free  = 0;
             b->magic = KMALLOC_MAGIC_USED;
+            spin_unlock_irqrestore(&g_kmalloc_lock, flags);
             return (void *)(b + 1);
         }
 
@@ -178,6 +180,7 @@ void *kmalloc(size_t size) {
     }
 
     printk("[kmalloc] OOM: could not allocate %zu bytes\n", size);
+    spin_unlock_irqrestore(&g_kmalloc_lock, flags);
     return NULL;
 }
 
@@ -186,6 +189,8 @@ void kfree(void *ptr) {
         return;
     }
 
+    uint64_t flags = spin_lock_irqsave(&g_kmalloc_lock);
+
     /* The header lives in the 48 bytes immediately before the user pointer. */
     kmalloc_block_t *block = (kmalloc_block_t *)ptr - 1;
 
@@ -193,6 +198,7 @@ void kfree(void *ptr) {
     if (block->magic == KMALLOC_MAGIC_FREE) {
         printk("[kmalloc] kfree: double-free detected at 0x%llx\n",
                (unsigned long long)(uintptr_t)ptr);
+        spin_unlock_irqrestore(&g_kmalloc_lock, flags);
         return;
     }
     if (block->magic != KMALLOC_MAGIC_USED) {
@@ -200,11 +206,13 @@ void kfree(void *ptr) {
                "(corruption or invalid pointer?)\n",
                block->magic,
                (unsigned long long)(uintptr_t)ptr);
+        spin_unlock_irqrestore(&g_kmalloc_lock, flags);
         return;
     }
     if (block->free) {
         printk("[kmalloc] kfree: block marked free but magic is USED at 0x%llx\n",
                (unsigned long long)(uintptr_t)ptr);
+        spin_unlock_irqrestore(&g_kmalloc_lock, flags);
         return;
     }
 
@@ -226,4 +234,6 @@ void kfree(void *ptr) {
         /* Invalidate the absorbed header so stale pointers are caught. */
         next->magic = 0;
     }
+
+    spin_unlock_irqrestore(&g_kmalloc_lock, flags);
 }

@@ -3,6 +3,7 @@
 #include "cpu/apic.h"
 #include <include/printk.h>
 #include <kernel/panic.h>
+#include <kernel/sched.h>
 
 static const char* const exception_messages[] = {
     "Divide by Zero",
@@ -35,7 +36,7 @@ static const char* const exception_messages[] = {
 };
 
 
-void isr_handler(interrupt_frame* frame) {
+interrupt_frame *isr_handler(interrupt_frame* frame) {
     if (frame->vector < 32) {
         printk("\n[EXCEPTION] %s (vector=%llu)\n",
                exception_messages[frame->vector],
@@ -68,7 +69,13 @@ void isr_handler(interrupt_frame* frame) {
 
     irq_dispatch(frame);
 
+    if (frame->vector == SCHED_TICK_VECTOR) {
+        frame = sched_on_tick(frame);
+    }
+
     if (x86_lapic_ready()) {
         x86_lapic_handle_irq((uint8_t)frame->vector);
     }
+
+    return frame;
 }

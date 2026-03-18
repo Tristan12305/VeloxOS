@@ -1,5 +1,7 @@
 #include "gdt.h"
 #include <stdint.h>
+#include <string.h>
+#include <arch/x86_64/cpu/percpu.h>
 
 
 typedef struct {
@@ -15,6 +17,17 @@ typedef struct {
     uint16_t  limit;
     gdtEntry* address;
 } __attribute__((packed)) gDescriptor;
+
+typedef struct {
+    uint16_t limit_low;
+    uint16_t base_low;
+    uint8_t  base_mid1;
+    uint8_t  access;
+    uint8_t  limit_high;
+    uint8_t  base_mid2;
+    uint32_t base_high;
+    uint32_t reserved;
+} __attribute__((packed)) tssDescriptor;
 
 typedef enum {
     CODE_READABLE        = 0x02,
@@ -39,36 +52,76 @@ typedef enum {
 #define GDT_FLAGS_LIMIT_HIGH(limit, flags) ((((limit) >> 16) & 0x0F) | ((flags) & 0xF0))
 #define GDT_HIGHER_BASE(base)           (((base) >> 24) & 0xFF)
 
-#define GDT_ENTRY(base, limit, access, flags) { \
+#define GDT_ENTRY(base, limit, access, flags) ((gdtEntry){ \
     GDT_LOWER_LIMIT(limit),                     \
     GDT_LOWER_BASE(base),                       \
     GDT_MIDDLE_BASE(base),                      \
     (access),                                   \
     GDT_FLAGS_LIMIT_HIGH(limit, flags),         \
     GDT_HIGHER_BASE(base)                       \
-}
-
-gdtEntry GDT[] = {
-    // Null descriptor
-    GDT_ENTRY(0, 0, 0, 0),
-
-    // Kernel code segment (64-bit)
-    // FLAG_64BIT sets the L bit.
-    GDT_ENTRY(0, 0, ACCESS_PRESENT | RING_ZERO | CODE_SEGMENT | CODE_READABLE,
-              FLAG_64BIT | GRANULARITY_4K),
-
-    // Kernel data segment
-    // In long mode, data segments mostly don't matter but ss must be valid.
-    GDT_ENTRY(0, 0, ACCESS_PRESENT | RING_ZERO | DATA_SEGMENT | DATA_WRITEABLE,
-              GRANULARITY_4K),
-};
-
-gDescriptor gdtDescriptor = { sizeof(GDT) - 1, GDT };
+})
 
 
 extern void x86_loadGDT(gDescriptor* descriptor, uint16_t codeSegment, uint16_t dataSegment);
 
+static inline void x86_loadTSS(uint16_t selector) {
+    __asm__ volatile("ltr %0" :: "m"(selector));
+}
+
+static inline uintptr_t read_rsp(void) {
+    uintptr_t rsp;
+    __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
+    return rsp;
+}
+
+static void gdt_set_tss(uint8_t *gdt_base, tss64_t *tss) {
+    tssDescriptor *tss_desc = (tssDescriptor *)(gdt_base + (3 * 8));
+    uint64_t base = (uint64_t)(uintptr_t)tss;
+    uint32_t limit = (uint32_t)(sizeof(tss64_t) - 1);
+
+    tss_desc->limit_low  = (uint16_t)(limit & 0xFFFF);
+    tss_desc->base_low   = (uint16_t)(base & 0xFFFF);
+    tss_desc->base_mid1  = (uint8_t)((base >> 16) & 0xFF);
+    tss_desc->access     = 0x89; // present, ring 0, available 64-bit TSS
+    tss_desc->limit_high = (uint8_t)((limit >> 16) & 0x0F);
+    tss_desc->base_mid2  = (uint8_t)((base >> 24) & 0xFF);
+    tss_desc->base_high  = (uint32_t)((base >> 32) & 0xFFFFFFFF);
+    tss_desc->reserved   = 0;
+}
+
+void x86_gdt_init_cpu(struct cpu_t *cpu, uintptr_t rsp0) {
+    if (!cpu) {
+        return;
+    }
+
+    memset(cpu->gdt, 0, sizeof(cpu->gdt));
+
+    gdtEntry *entries = (gdtEntry *)cpu->gdt;
+    entries[0] = GDT_ENTRY(0, 0, 0, 0);
+    entries[1] = GDT_ENTRY(0, 0,
+                           ACCESS_PRESENT | RING_ZERO | CODE_SEGMENT | CODE_READABLE,
+                           FLAG_64BIT | GRANULARITY_4K);
+    entries[2] = GDT_ENTRY(0, 0,
+                           ACCESS_PRESENT | RING_ZERO | DATA_SEGMENT | DATA_WRITEABLE,
+                           GRANULARITY_4K);
+
+    memset(&cpu->tss, 0, sizeof(cpu->tss));
+    cpu->tss.rsp[0] = rsp0;
+    cpu->tss.iomap_base = (uint16_t)sizeof(tss64_t);
+    gdt_set_tss(cpu->gdt, &cpu->tss);
+
+    gDescriptor gdtr = {
+        .limit = (uint16_t)(CPU_GDT_SIZE - 1),
+        .address = (gdtEntry *)cpu->gdt,
+    };
+
+    x86_loadGDT(&gdtr, X86_GDT_CODE_SEGMENT, X86_GDT_DATA_SEGMENT);
+    x86_loadTSS(X86_GDT_TSS_SEGMENT);
+}
+
 void x86_initGDT() {
-    x86_loadGDT(&gdtDescriptor, X86_GDT_CODE_SEGMENT, X86_GDT_DATA_SEGMENT);
-    
+    cpu_t *cpu = &g_cpus[0];
+    uintptr_t rsp0 = read_rsp();
+    cpu->kernel_stack_top = rsp0;
+    x86_gdt_init_cpu(cpu, rsp0);
 }

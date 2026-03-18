@@ -35,10 +35,14 @@ add_executable(kernel.elf
     arch/x86_64/cpu/acpi.c
     arch/x86_64/cpu/madt.c
     arch/x86_64/cpu/ioapic.c
+    arch/x86_64/cpu/smp.c
     arch/x86_64/drivers/IO/ps2_keyboard.c
     arch/x86_64/drivers/block/pci.c
     arch/x86_64/drivers/block/virtio/vblk.c
+    fs/fat32.c
     fs/partition/gpt.c
+    fs/vfs/fat32_vfs.c
+    fs/vfs/vfs.c
     lib/string.c
     mm/kmalloc.c
     arch/x86_64/lib/spinlock.S
@@ -46,6 +50,7 @@ add_executable(kernel.elf
     kernel/acpi.c
     kernel/memory.c
     arch/x86_64/init.c
+    kernel/sched.c
 
 )
 

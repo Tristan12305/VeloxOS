@@ -28,4 +28,4 @@ static inline int interrupt_from_user(const interrupt_frame* frame) {
     return (frame->cs & 0x3u) == 0x3u;
 }
 
-void isr_handler(interrupt_frame* frame);
+interrupt_frame *isr_handler(interrupt_frame* frame);

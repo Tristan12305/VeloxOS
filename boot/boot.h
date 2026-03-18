@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <include/limine.h>
 
 
 
@@ -63,6 +64,7 @@ extern BootFramebuffer g_framebuffer;
 extern BootMemoryMap   g_memory_map;
 extern uint64_t        g_hhdm_offset;
 extern uint64_t        g_rsdp_address;
+extern struct LIMINE_MP(response) *g_mp_response;
 
 
 

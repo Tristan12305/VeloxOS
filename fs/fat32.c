@@ -1,5 +1,7 @@
 #include "fat32.h"
 #include "partition/gpt.h"
+#include <include/kmalloc.h>
+#include <include/printk.h>
 #include <lib/string.h>
 
 
@@ -325,7 +327,6 @@ static bool process_dir_cluster(fat32_vol_t       *vol,
         fat32_dirent_t *d = &out[(*count)++];
         memset(d, 0, sizeof(*d));
 
-        // --- name ---
         bool used_lfn = false;
         if (lfn->valid && lfn->total > 0 && lfn->expected_seq == 0) {
             // Verify checksum before trusting the LFN
@@ -407,4 +408,463 @@ bool fat32_read_dir(fat32_vol_t *vol, uint32_t dir_cluster,
 
     kfree(cluster_buf);
     return true;
+}
+
+static char fat32_tolower(char c)
+{
+    if (c >= 'A' && c <= 'Z') {
+        return (char)(c + 32);
+    }
+    return c;
+}
+
+static bool fat32_name_equal_ci(const char *a, const char *b)
+{
+    if (!a || !b) {
+        return false;
+    }
+
+    while (*a && *b) {
+        if (fat32_tolower(*a) != fat32_tolower(*b)) {
+            return false;
+        }
+        a++;
+        b++;
+    }
+
+    return *a == '\0' && *b == '\0';
+}
+
+static const char *fat32_skip_slashes(const char *p)
+{
+    while (p && *p == '/') {
+        p++;
+    }
+    return p;
+}
+
+static int fat32_copy_segment(const char *p, char *out, size_t out_cap,
+                              const char **next)
+{
+    size_t len = 0;
+
+    if (!p || !out || out_cap == 0) {
+        return FAT32_ERR_INVAL;
+    }
+
+    while (p[len] && p[len] != '/') {
+        if (len + 1 >= out_cap) {
+            return FAT32_ERR_NAMETOOLONG;
+        }
+        out[len] = p[len];
+        len++;
+    }
+
+    out[len] = '\0';
+    if (next) {
+        *next = p + len;
+    }
+
+    return (int)len;
+}
+
+typedef int (*fat32_dir_iter_cb)(const fat32_dirent_t *ent, void *ctx);
+
+typedef struct {
+    const char *name;
+    fat32_dirent_t *out;
+    bool found;
+} fat32_lookup_ctx_t;
+
+typedef struct {
+    size_t target;
+    size_t current;
+    fat32_dirent_t *out;
+    bool found;
+} fat32_readdir_ctx_t;
+
+static int fat32_lookup_cb(const fat32_dirent_t *ent, void *ctx_ptr)
+{
+    fat32_lookup_ctx_t *ctx = (fat32_lookup_ctx_t *)ctx_ptr;
+    if (fat32_name_equal_ci(ent->name, ctx->name)) {
+        *ctx->out = *ent;
+        ctx->found = true;
+        return 1;
+    }
+    return 0;
+}
+
+static int fat32_readdir_cb(const fat32_dirent_t *ent, void *ctx_ptr)
+{
+    fat32_readdir_ctx_t *ctx = (fat32_readdir_ctx_t *)ctx_ptr;
+    if (ctx->current == ctx->target) {
+        *ctx->out = *ent;
+        ctx->found = true;
+        return 1;
+    }
+    ctx->current++;
+    return 0;
+}
+
+static int fat32_iter_dir(fat32_vol_t *vol, uint32_t dir_cluster,
+                          fat32_dir_iter_cb cb, void *ctx)
+{
+    if (!vol || !cb) {
+        return FAT32_ERR_INVAL;
+    }
+
+    if (dir_cluster < 2) {
+        return FAT32_ERR_INVAL;
+    }
+
+    uint8_t *cluster_buf = kmalloc(vol->bytes_per_cluster);
+    if (!cluster_buf) {
+        printk("[FAT32] iter_dir: out of memory\n");
+        return FAT32_ERR_NOMEM;
+    }
+
+    lfn_state_t lfn = { .valid = false, .total = 0 };
+    uint32_t cluster = dir_cluster;
+    bool done = false;
+    int rc = FAT32_OK;
+
+    while (!done && cluster >= 2 && cluster < FAT32_BAD) {
+        if (!fat32_read_cluster(vol, cluster, cluster_buf)) {
+            printk("[FAT32] iter_dir: I/O error on cluster %u\n", cluster);
+            rc = FAT32_ERR_IO;
+            break;
+        }
+
+        uint32_t entries_per_cluster = vol->bytes_per_cluster / 32;
+        for (uint32_t i = 0; i < entries_per_cluster; i++) {
+            const fat32_raw_entry_t *raw =
+                (const fat32_raw_entry_t *)(cluster_buf + i * 32);
+
+            uint8_t first = (uint8_t)raw->name[0];
+
+            if (first == 0x00) {
+                done = true;
+                break;
+            }
+
+            if (first == 0xE5) {
+                lfn.valid = false;
+                lfn.total = 0;
+                continue;
+            }
+
+            if (raw->attributes == FAT_ATTR_LFN) {
+                const fat32_lfn_entry_t *le = (const fat32_lfn_entry_t *)raw;
+                uint8_t seq = le->sequence;
+
+                if (seq & 0x40) {
+                    lfn.total        = 0;
+                    lfn.expected_seq = seq & ~0x40;
+                    lfn.checksum     = le->checksum;
+                    lfn.valid        = true;
+                }
+
+                if (!lfn.valid || (seq & ~0x40) != lfn.expected_seq) {
+                    lfn.valid = false;
+                }
+
+                if (lfn.valid) {
+                    lfn_push(&lfn, le);
+                    lfn.expected_seq--;
+                }
+                continue;
+            }
+
+            if (raw->attributes & FAT_ATTR_VOLUME_ID) {
+                lfn.valid = false;
+                lfn.total = 0;
+                continue;
+            }
+
+            fat32_dirent_t d;
+            memset(&d, 0, sizeof(d));
+
+            bool used_lfn = false;
+            if (lfn.valid && lfn.total > 0 && lfn.expected_seq == 0) {
+                char name11[11];
+                memcpy(name11, raw->name, 8);
+                memcpy(name11 + 8, raw->ext, 3);
+                if (lfn_checksum(name11) == lfn.checksum) {
+                    utf16le_to_utf8(lfn.chars, lfn.total, d.name);
+                    used_lfn = true;
+                }
+            }
+            if (!used_lfn) {
+                build_83_name(raw, d.name);
+            }
+
+            d.attributes    = raw->attributes;
+            d.first_cluster = ((uint32_t)raw->cluster_high << 16) | raw->cluster_low;
+            d.file_size     = raw->file_size;
+
+            d.created.raw_date  = raw->create_date;
+            d.created.raw_time  = raw->create_time;
+            d.modified.raw_date = raw->write_date;
+            d.modified.raw_time = raw->write_time;
+            d.accessed.raw_date = raw->access_date;
+            d.accessed.raw_time = 0;
+
+            lfn.valid = false;
+            lfn.total = 0;
+
+            int cb_rc = cb(&d, ctx);
+            if (cb_rc < 0) {
+                rc = cb_rc;
+                done = true;
+                break;
+            }
+            if (cb_rc > 0) {
+                done = true;
+                break;
+            }
+        }
+
+        if (done) {
+            break;
+        }
+
+        uint32_t next = fat32_read_fat_entry(vol, cluster);
+        if (next == FAT32_BAD) {
+            printk("[FAT32] iter_dir: FAT I/O error at cluster %u\n", cluster);
+            rc = FAT32_ERR_IO;
+            break;
+        }
+        if (next >= FAT32_EOC) {
+            break;
+        }
+        cluster = next;
+    }
+
+    kfree(cluster_buf);
+    return rc;
+}
+
+int fat32_lookup(fat32_vol_t *vol, uint32_t dir_cluster,
+                 const char *name, fat32_dirent_t *out)
+{
+    if (!vol || !name || !out) {
+        return FAT32_ERR_INVAL;
+    }
+
+    fat32_lookup_ctx_t ctx = {
+        .name = name,
+        .out = out,
+        .found = false,
+    };
+
+    int rc = fat32_iter_dir(vol, dir_cluster, fat32_lookup_cb, &ctx);
+    if (rc < 0) {
+        return rc;
+    }
+    return ctx.found ? FAT32_OK : FAT32_ERR_NOENT;
+}
+
+int fat32_readdir_index(fat32_vol_t *vol, uint32_t dir_cluster,
+                        size_t index, fat32_dirent_t *out)
+{
+    if (!vol || !out) {
+        return FAT32_ERR_INVAL;
+    }
+
+    fat32_readdir_ctx_t ctx = {
+        .target = index,
+        .current = 0,
+        .out = out,
+        .found = false,
+    };
+
+    int rc = fat32_iter_dir(vol, dir_cluster, fat32_readdir_cb, &ctx);
+    if (rc < 0) {
+        return rc;
+    }
+    return ctx.found ? 1 : 0;
+}
+
+static void fat32_make_root_dirent(const fat32_vol_t *vol, fat32_dirent_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->name[0] = '/';
+    out->name[1] = '\0';
+    out->attributes = FAT_ATTR_DIRECTORY;
+    out->first_cluster = vol->root_cluster;
+    out->file_size = 0;
+}
+
+int fat32_lookup_path(fat32_vol_t *vol, const char *path, fat32_dirent_t *out)
+{
+    if (!vol || !out) {
+        return FAT32_ERR_INVAL;
+    }
+
+    if (!path || path[0] == '\0') {
+        fat32_make_root_dirent(vol, out);
+        return FAT32_OK;
+    }
+
+    const char *p = fat32_skip_slashes(path);
+    if (!p || *p == '\0') {
+        fat32_make_root_dirent(vol, out);
+        return FAT32_OK;
+    }
+
+    uint32_t dir_cluster = vol->root_cluster;
+    fat32_dirent_t current;
+
+    while (p && *p) {
+        char name[FAT32_NAME_MAX + 1];
+        int seg_len = fat32_copy_segment(p, name, sizeof(name), &p);
+        if (seg_len < 0) {
+            return seg_len;
+        }
+
+        int rc = fat32_lookup(vol, dir_cluster, name, &current);
+        if (rc < 0) {
+            return rc;
+        }
+
+        p = fat32_skip_slashes(p);
+        if (p && *p) {
+            if (!(current.attributes & FAT_ATTR_DIRECTORY)) {
+                return FAT32_ERR_NOTDIR;
+            }
+            if (current.first_cluster < 2) {
+                return FAT32_ERR_IO;
+            }
+            dir_cluster = current.first_cluster;
+        }
+    }
+
+    *out = current;
+    return FAT32_OK;
+}
+
+int fat32_stat_path(fat32_vol_t *vol, const char *path, fat32_dirent_t *out)
+{
+    return fat32_lookup_path(vol, path, out);
+}
+
+fat32_ssize_t fat32_read_file_at(fat32_vol_t *vol,
+                                 uint32_t first_cluster,
+                                 uint32_t file_size,
+                                 uint64_t offset,
+                                 void *buf, size_t len)
+{
+    if (!vol || !buf) {
+        return FAT32_ERR_INVAL;
+    }
+
+    if (offset >= file_size || len == 0) {
+        return 0;
+    }
+
+    if (file_size == 0) {
+        return 0;
+    }
+
+    if (first_cluster < 2) {
+        return FAT32_ERR_IO;
+    }
+
+    uint64_t remaining = (uint64_t)file_size - offset;
+    if (len > remaining) {
+        len = (size_t)remaining;
+    }
+
+    uint8_t *cluster_buf = kmalloc(vol->bytes_per_cluster);
+    if (!cluster_buf) {
+        printk("[FAT32] read_file: out of memory\n");
+        return FAT32_ERR_NOMEM;
+    }
+
+    uint64_t cluster_size = vol->bytes_per_cluster;
+    uint32_t cluster = first_cluster;
+    uint64_t skip = offset;
+
+    while (skip >= cluster_size) {
+        uint32_t next = fat32_read_fat_entry(vol, cluster);
+        if (next == FAT32_BAD) {
+            printk("[FAT32] read_file: FAT I/O error at cluster %u\n", cluster);
+            kfree(cluster_buf);
+            return FAT32_ERR_IO;
+        }
+        if (next >= FAT32_EOC) {
+            kfree(cluster_buf);
+            return 0;
+        }
+        cluster = next;
+        skip -= cluster_size;
+    }
+
+    size_t total_read = 0;
+    size_t to_read = len;
+    uint64_t intra = skip;
+
+    while (to_read > 0 && cluster >= 2 && cluster < FAT32_EOC) {
+        if (!fat32_read_cluster(vol, cluster, cluster_buf)) {
+            printk("[FAT32] read_file: I/O error on cluster %u\n", cluster);
+            kfree(cluster_buf);
+            return FAT32_ERR_IO;
+        }
+
+        size_t avail = (size_t)cluster_size - (size_t)intra;
+        size_t chunk = (to_read < avail) ? to_read : avail;
+
+        memcpy((uint8_t *)buf + total_read, cluster_buf + intra, chunk);
+        total_read += chunk;
+        to_read -= chunk;
+        intra = 0;
+
+        if (to_read == 0) {
+            break;
+        }
+
+        uint32_t next = fat32_read_fat_entry(vol, cluster);
+        if (next == FAT32_BAD) {
+            printk("[FAT32] read_file: FAT I/O error at cluster %u\n", cluster);
+            kfree(cluster_buf);
+            return FAT32_ERR_IO;
+        }
+        if (next >= FAT32_EOC) {
+            break;
+        }
+        cluster = next;
+    }
+
+    kfree(cluster_buf);
+    return (fat32_ssize_t)total_read;
+}
+
+int fat32_read_dir_path(fat32_vol_t *vol, const char *path,
+                        fat32_dirent_t *out, uint32_t max_entries,
+                        uint32_t *count_out)
+{
+    if (!vol || !out || !count_out) {
+        return FAT32_ERR_INVAL;
+    }
+
+    fat32_dirent_t dirent;
+    int rc = fat32_lookup_path(vol, path, &dirent);
+    if (rc < 0) {
+        return rc;
+    }
+
+    if (!(dirent.attributes & FAT_ATTR_DIRECTORY)) {
+        return FAT32_ERR_NOTDIR;
+    }
+
+    uint32_t dir_cluster = dirent.first_cluster;
+    if (dir_cluster < 2) {
+        dir_cluster = vol->root_cluster;
+    }
+
+    if (!fat32_read_dir(vol, dir_cluster, out, max_entries, count_out)) {
+        return FAT32_ERR_IO;
+    }
+
+    return FAT32_OK;
 }

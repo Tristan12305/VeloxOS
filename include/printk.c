@@ -6,7 +6,8 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdarg.h>
-
+#include <include/spinlock.h>
+#include <stdbool.h>
 
 #define COLOR_FG  0x00F8F8F2   /* near-white  */
 #define COLOR_BG  0x00000000   /* black       */
@@ -14,7 +15,7 @@
 /* Tab width in characters.                                                */
 #define TAB_WIDTH 4
 
-
+static spinlock_t printlock = SPINLOCK_INIT;
 
 static uint32_t *fb_ptr;       /* Base of the framebuffer as 32-bpp words  */
 static uint32_t  fb_pitch_px;  /* Pitch in 32-bpp words (pixels per row)   */
@@ -307,6 +308,7 @@ static void vprintk(const char *fmt, va_list args) {
 
 
 void printk_init(void) {
+    
     BootFramebuffer *fb = &g_framebuffer;
 
     if (!fb->address)                              printk_halt();
@@ -332,14 +334,23 @@ void printk_init(void) {
 }
 
 void printk(const char *fmt, ...) {
-    /* later on when multicore: acquire spinlock here before SMP / interrupts are enabled.    */
+    
     va_list args;
     va_start(args, fmt);
     vprintk(fmt, args);
     va_end(args);
-    /* later: release spinlock.                                             */
 }
 
+// with spinlocks, but shouldnt be called before smp startup.
+
+void safe_printk(const char *fmt, ...) {
+    uint64_t flags = spin_lock_irqsave(&printlock);
+    va_list args;
+    va_start(args, fmt);
+    vprintk(fmt, args);
+    va_end(args);
+    spin_unlock_irqrestore(&printlock, flags);
+}
 
 void clear_screen(void) {
     fill_rect(0, 0, fb_pitch_px, fb_height_px, COLOR_BG);

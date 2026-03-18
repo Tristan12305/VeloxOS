@@ -98,8 +98,11 @@ isr_no_err i
 	sub     rsp, 8
 	push    rax
 	call    isr_handler
-	pop     rax
-	mov     rsp, rax
+	mov     rdx, rax        ; rax = new frame pointer (or NULL)
+	pop     rax             ; rax = original frame pointer
+	test    rdx, rdx
+	cmovz   rdx, rax
+	mov     rsp, rdx
 
     pop     r15
     pop     r14

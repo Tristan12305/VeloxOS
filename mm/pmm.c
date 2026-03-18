@@ -12,6 +12,7 @@ This asymmetry is a trap — the naming convention should be enforced more clear
 
 
 #include <kernel/panic.h>
+#include <include/spinlock.h>
 
 extern uint64_t g_hhdm_offset;
 
@@ -22,6 +23,7 @@ static uint8_t* g_bitmap;
 static pmm_info_t g_pmm_info;
 static uint64_t g_next_search;
 static bool g_initialized;
+static spinlock_t g_pmm_lock = SPINLOCK_INIT;
 
 static inline uint64_t align_up(uint64_t value, uint64_t align) {
     return (value + align - 1) & ~(align - 1);
@@ -162,6 +164,8 @@ void pmm_init(const BootMemoryMap* memory_map) {
         panic("PMM init failed: invalid memory map");
     }
 
+    spin_lock(&g_pmm_lock);
+
     uint64_t highest_phys = max_physical_end(memory_map);
     uint64_t total_pages = align_up(highest_phys, PMM_PAGE_SIZE) / PMM_PAGE_SIZE;
 
@@ -215,6 +219,8 @@ void pmm_init(const BootMemoryMap* memory_map) {
 
     g_next_search = (g_pmm_info.total_pages > 1) ? 1 : 0;
     g_initialized = true;
+
+    spin_unlock(&g_pmm_lock);
 }
 
 bool pmm_ready(void) {
@@ -237,7 +243,10 @@ bool pmm_try_alloc_page_phys(uint64_t* out_phys_addr) {
 
     *out_phys_addr = PMM_INVALID_PHYS_ADDR;
 
+    uint64_t flags = spin_lock_irqsave(&g_pmm_lock);
+
     if (!g_initialized || g_pmm_info.free_pages == 0 || g_pmm_info.total_pages == 0) {
+        spin_unlock_irqrestore(&g_pmm_lock, flags);
         return false;
     }
 
@@ -246,6 +255,7 @@ bool pmm_try_alloc_page_phys(uint64_t* out_phys_addr) {
         start = 0;
     }
 
+    bool allocated = false;
     for (uint64_t scanned = 0; scanned < g_pmm_info.total_pages; scanned++) {
         uint64_t page = start + scanned;
         if (page >= g_pmm_info.total_pages) {
@@ -259,11 +269,13 @@ bool pmm_try_alloc_page_phys(uint64_t* out_phys_addr) {
                 g_next_search = 0;
             }
             *out_phys_addr = page * PMM_PAGE_SIZE;
-            return true;
+            allocated = true;
+            break;
         }
     }
 
-    return false;
+    spin_unlock_irqrestore(&g_pmm_lock, flags);
+    return allocated;
 }
 
 void* pmm_alloc_page(void) {
@@ -276,15 +288,19 @@ void* pmm_alloc_page(void) {
 }
 
 void pmm_free_page_phys(uint64_t phys_addr) {
+    uint64_t flags = spin_lock_irqsave(&g_pmm_lock);
     if (!g_initialized) {
+        spin_unlock_irqrestore(&g_pmm_lock, flags);
         return;
     }
     if ((phys_addr & (PMM_PAGE_SIZE - 1)) != 0) {
+        spin_unlock_irqrestore(&g_pmm_lock, flags);
         return;
     }
 
     uint64_t page = phys_to_page(phys_addr);
     if (page >= g_pmm_info.total_pages) {
+        spin_unlock_irqrestore(&g_pmm_lock, flags);
         return;
     }
 
@@ -294,6 +310,8 @@ void pmm_free_page_phys(uint64_t phys_addr) {
             g_next_search = page;
         }
     }
+
+    spin_unlock_irqrestore(&g_pmm_lock, flags);
 }
 
 void pmm_free_page(void* virt_addr) {

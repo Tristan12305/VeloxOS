@@ -5,6 +5,7 @@
 
 #include <boot/boot.h>
 #include <include/printk.h>
+#include <include/spinlock.h>
 #include <kernel/panic.h>
 
 #include <stdbool.h>
@@ -38,6 +39,7 @@ static size_t g_vmalloc_free_count;
 static uint64_t g_vmalloc_base;
 static uint64_t g_vmalloc_end;
 static bool g_vmalloc_initialized;
+static spinlock_t g_vmalloc_lock = SPINLOCK_INIT;
 
 static inline uint64_t align_up(uint64_t value, uint64_t align) {
     return (value + align - 1) & ~(align - 1);
@@ -93,7 +95,7 @@ static void vmalloc_free_range(uint64_t start, uint64_t size) {
     }
 }
 
-static bool vmalloc_init_once(void) {
+static bool vmalloc_init_once_locked(void) {
     if (g_vmalloc_initialized) {
         return true;
     }
@@ -152,7 +154,10 @@ static bool vmalloc_init_once(void) {
 }
 
 void vmalloc_init(void) {
-    if (!vmalloc_init_once()) {
+    uint64_t flags = spin_lock_irqsave(&g_vmalloc_lock);
+    bool ok = vmalloc_init_once_locked();
+    spin_unlock_irqrestore(&g_vmalloc_lock, flags);
+    if (!ok) {
         printk("[vmalloc] init failed\n");
     }
 }
@@ -162,12 +167,14 @@ void* vmalloc(size_t size, uint64_t flags) {
         return (void*)0;
     }
 
-    if (!vmalloc_init_once()) {
+    uint64_t aligned = align_up((uint64_t)size, PMM_PAGE_SIZE);
+    if (aligned < (uint64_t)size) {
         return (void*)0;
     }
 
-    uint64_t aligned = align_up((uint64_t)size, PMM_PAGE_SIZE);
-    if (aligned < (uint64_t)size) {
+    uint64_t irq_flags = spin_lock_irqsave(&g_vmalloc_lock);
+    if (!vmalloc_init_once_locked()) {
+        spin_unlock_irqrestore(&g_vmalloc_lock, irq_flags);
         return (void*)0;
     }
 
@@ -189,6 +196,7 @@ void* vmalloc(size_t size, uint64_t flags) {
         const paging_info_t* paging = paging_get_info();
         if (!paging || paging->root_pml4_phys == 0) {
             vmalloc_free_range(addr, aligned);
+            spin_unlock_irqrestore(&g_vmalloc_lock, irq_flags);
             return (void*)0;
         }
 
@@ -210,6 +218,7 @@ void* vmalloc(size_t size, uint64_t flags) {
         }
 
         if (mapped == aligned) {
+            spin_unlock_irqrestore(&g_vmalloc_lock, irq_flags);
             return (void*)(uintptr_t)addr;
         }
 
@@ -221,18 +230,16 @@ void* vmalloc(size_t size, uint64_t flags) {
         }
 
         vmalloc_free_range(addr, aligned);
+        spin_unlock_irqrestore(&g_vmalloc_lock, irq_flags);
         return (void*)0;
     }
 
+    spin_unlock_irqrestore(&g_vmalloc_lock, irq_flags);
     return (void*)0;
 }
 
 void vfree(void* addr, size_t size) {
     if (!addr || size == 0) {
-        return;
-    }
-
-    if (!g_vmalloc_initialized) {
         return;
     }
 
@@ -247,13 +254,20 @@ void vfree(void* addr, size_t size) {
         return;
     }
 
+    uint64_t irq_flags = spin_lock_irqsave(&g_vmalloc_lock);
+    if (!g_vmalloc_initialized) {
+        spin_unlock_irqrestore(&g_vmalloc_lock, irq_flags);
+        return;
+    }
     if (start < g_vmalloc_base || start >= g_vmalloc_end || start > (g_vmalloc_end - aligned)) {
         printk("[vmalloc] vfree: address out of range 0x%llx\n", (unsigned long long)start);
+        spin_unlock_irqrestore(&g_vmalloc_lock, irq_flags);
         return;
     }
 
     const paging_info_t* paging = paging_get_info();
     if (!paging || paging->root_pml4_phys == 0) {
+        spin_unlock_irqrestore(&g_vmalloc_lock, irq_flags);
         return;
     }
 
@@ -266,4 +280,6 @@ void vfree(void* addr, size_t size) {
     }
 
     vmalloc_free_range(start, aligned);
+
+    spin_unlock_irqrestore(&g_vmalloc_lock, irq_flags);
 }

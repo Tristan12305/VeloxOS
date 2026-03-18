@@ -41,6 +41,7 @@ void x86_lapic_handle_irq(uint8_t vector);
 bool     x86_lapic_timer_start(uint8_t vector, uint32_t initial_count, bool periodic);
 void     x86_lapic_timer_stop(void);
 uint64_t x86_lapic_timer_ticks(void);
+bool     x86_lapic_timer_calibrate(uint32_t target_hz, uint32_t *out_initial_count);
 
 #define LAPIC_ICR_DELIVERY_FIXED  0x00000U
 #define LAPIC_ICR_DELIVERY_INIT   0x00500U

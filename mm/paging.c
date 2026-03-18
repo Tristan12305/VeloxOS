@@ -2,9 +2,8 @@
 
 #include "pmm.h"
 
-
-
 #include <include/printk.h>
+#include <include/spinlock.h>
 #include <kernel/panic.h>
 
 #include <stddef.h>
@@ -42,6 +41,7 @@ extern void paging_load_cr3(uint64_t phys_addr);
 static paging_info_t g_paging_info;
 static bool g_paging_initialized;
 static bool g_nx_enabled;
+static spinlock_t g_paging_lock = SPINLOCK_INIT;
 
 static void map_page_4k(uint64_t root_pml4_phys,
                         uint64_t virt_addr,
@@ -55,6 +55,16 @@ static bool walk_to_pte(uint64_t root_pml4_phys,
                         bool create,
                         bool user,
                         uint64_t** out_pte);
+static bool paging_map_page_locked(uint64_t root_pml4_phys,
+                                   uint64_t virt_addr,
+                                   uint64_t phys_addr,
+                                   uint64_t flags);
+static bool paging_unmap_page_locked(uint64_t root_pml4_phys,
+                                     uint64_t virt_addr,
+                                     uint64_t* out_phys_addr);
+static bool paging_protect_page_locked(uint64_t root_pml4_phys,
+                                       uint64_t virt_addr,
+                                       uint64_t flags);
 
 static inline uint64_t align_up(uint64_t value, uint64_t align) {
     return (value + align - 1) & ~(align - 1);
@@ -411,13 +421,16 @@ static uint64_t reclaim_bootloader_reclaimable(const BootMemoryMap* memory_map,
 }
 
 void paging_init(const BootMemoryMap* memory_map) {
-    if (g_paging_initialized) {
-        return;
-    }
-
     if (!memory_map || !memory_map->entries || memory_map->count == 0) {
         panic("Paging init failed: invalid memory map");
     }
+
+    spin_lock(&g_paging_lock);
+    if (g_paging_initialized) {
+        spin_unlock(&g_paging_lock);
+        return;
+    }
+
     if (!pmm_ready()) {
         panic("Paging init failed: PMM is not ready");
     }
@@ -544,6 +557,8 @@ void paging_init(const BootMemoryMap* memory_map) {
 
     printk("[paging] step 7/7: done (tables=%llu)\n",
            (unsigned long long)g_paging_info.table_pages_allocated);
+
+    spin_unlock(&g_paging_lock);
 }
 
 bool paging_ready(void) {
@@ -555,18 +570,26 @@ const paging_info_t* paging_get_info(void) {
 }
 
 void paging_set_nx_enabled(bool enabled) {
+    uint64_t flags = spin_lock_irqsave(&g_paging_lock);
     g_nx_enabled = enabled;
+    spin_unlock_irqrestore(&g_paging_lock, flags);
 }
 
 bool paging_translate(uint64_t root_pml4_phys, uint64_t virt_addr, uint64_t* out_phys_addr) {
-    return translate_with_cr3(root_pml4_phys, virt_addr, out_phys_addr);
+    uint64_t flags = spin_lock_irqsave(&g_paging_lock);
+    bool ok = translate_with_cr3(root_pml4_phys, virt_addr, out_phys_addr);
+    spin_unlock_irqrestore(&g_paging_lock, flags);
+    return ok;
 }
 
 void paging_invlpg(uint64_t virt_addr) {
     __asm__ volatile("invlpg (%0)" :: "r"(virt_addr) : "memory");
 }
 
-bool paging_map_page(uint64_t root_pml4_phys, uint64_t virt_addr, uint64_t phys_addr, uint64_t flags) {
+static bool paging_map_page_locked(uint64_t root_pml4_phys,
+                                   uint64_t virt_addr,
+                                   uint64_t phys_addr,
+                                   uint64_t flags) {
     if (((virt_addr | phys_addr) & (PAGE_SIZE_4K - 1)) != 0) {
         return false;
     }
@@ -604,6 +627,12 @@ bool paging_map_page(uint64_t root_pml4_phys, uint64_t virt_addr, uint64_t phys_
     return true;
 }
 
+bool paging_map_page(uint64_t root_pml4_phys, uint64_t virt_addr, uint64_t phys_addr, uint64_t flags) {
+    uint64_t irq_flags = spin_lock_irqsave(&g_paging_lock);
+    bool ok = paging_map_page_locked(root_pml4_phys, virt_addr, phys_addr, flags);
+    spin_unlock_irqrestore(&g_paging_lock, irq_flags);
+    return ok;
+}
 
 bool paging_map_range(uint64_t root_pml4_phys,
                       uint64_t virt_addr,
@@ -622,16 +651,20 @@ bool paging_map_range(uint64_t root_pml4_phys,
     if (aligned < size) {
         return false;
     }
+
+    uint64_t irq_flags = spin_lock_irqsave(&g_paging_lock);
+    bool ok = true;
     for (uint64_t offset = 0; offset < aligned; offset += PAGE_SIZE_4K) {
-        if (!paging_map_page(root_pml4_phys,
-                             virt_addr + offset,
-                             phys_addr + offset,
-                             flags)) {
-            return false;
+        if (!paging_map_page_locked(root_pml4_phys,
+                                    virt_addr + offset,
+                                    phys_addr + offset,
+                                    flags)) {
+            ok = false;
+            break;
         }
     }
-
-    return true;
+    spin_unlock_irqrestore(&g_paging_lock, irq_flags);
+    return ok;
 }
 
 
@@ -700,11 +733,9 @@ static void free_empty_tables(uint64_t root_pml4_phys, uint64_t virt_addr) {
 }
 
 
-
-
-
-
-bool paging_unmap_page(uint64_t root_pml4_phys, uint64_t virt_addr, uint64_t* out_phys_addr) {
+static bool paging_unmap_page_locked(uint64_t root_pml4_phys,
+                                     uint64_t virt_addr,
+                                     uint64_t* out_phys_addr) {
     uint64_t* pte = NULL;
     if (!walk_to_pte(root_pml4_phys, virt_addr, false, false, &pte)) {
         return false;
@@ -732,7 +763,16 @@ bool paging_unmap_page(uint64_t root_pml4_phys, uint64_t virt_addr, uint64_t* ou
     return true;
 }
 
-bool paging_protect_page(uint64_t root_pml4_phys, uint64_t virt_addr, uint64_t flags) {
+bool paging_unmap_page(uint64_t root_pml4_phys, uint64_t virt_addr, uint64_t* out_phys_addr) {
+    uint64_t irq_flags = spin_lock_irqsave(&g_paging_lock);
+    bool ok = paging_unmap_page_locked(root_pml4_phys, virt_addr, out_phys_addr);
+    spin_unlock_irqrestore(&g_paging_lock, irq_flags);
+    return ok;
+}
+
+static bool paging_protect_page_locked(uint64_t root_pml4_phys,
+                                       uint64_t virt_addr,
+                                       uint64_t flags) {
     uint64_t* pte = NULL;
     if (!walk_to_pte(root_pml4_phys, virt_addr, false, false, &pte)) {
         return false;
@@ -750,6 +790,13 @@ bool paging_protect_page(uint64_t root_pml4_phys, uint64_t virt_addr, uint64_t f
     return true;
 }
 
+bool paging_protect_page(uint64_t root_pml4_phys, uint64_t virt_addr, uint64_t flags) {
+    uint64_t irq_flags = spin_lock_irqsave(&g_paging_lock);
+    bool ok = paging_protect_page_locked(root_pml4_phys, virt_addr, flags);
+    spin_unlock_irqrestore(&g_paging_lock, irq_flags);
+    return ok;
+}
+
 bool paging_protect_range(uint64_t root_pml4_phys, uint64_t virt_addr, uint64_t size, uint64_t flags) {
     if (size == 0) {
         return false;
@@ -763,14 +810,15 @@ bool paging_protect_range(uint64_t root_pml4_phys, uint64_t virt_addr, uint64_t 
     if (aligned < size) {
         return false;
     }
+
+    uint64_t irq_flags = spin_lock_irqsave(&g_paging_lock);
     bool ok = true;
     for (uint64_t offset = 0; offset < aligned; offset += PAGE_SIZE_4K) {
-        if (!paging_protect_page(root_pml4_phys, virt_addr + offset, flags)) {
+        if (!paging_protect_page_locked(root_pml4_phys, virt_addr + offset, flags)) {
             ok = false;
         }
     }
+    spin_unlock_irqrestore(&g_paging_lock, irq_flags);
 
     return ok;
 }
-
-

@@ -5,15 +5,11 @@
 
 
 
-/* Initialise the console using the framebuffer in g_framebuffer.
- * Clears the screen and resets the cursor to (0, 0).                      */
 void printk_init(void);
 
-/* Write a NUL-terminated string to the framebuffer console.
- * Handles \n (newline) and \t (8-space tab stop).
- * Scrolls up by one text row when the cursor reaches the bottom.          */
-void printk(const char *fmt, ...);
 
+void printk(const char *fmt, ...);
+void safe_printk(const char *fmt, ...);
 void clear_screen();
 
 void printk_hex8(uint8_t value);

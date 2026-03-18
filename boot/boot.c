@@ -32,6 +32,17 @@ static volatile struct limine_rsdp_request rsdp_request = {
     .revision = 0,
 };
 
+#ifndef LIMINE_MP_REQUEST
+#define LIMINE_MP_REQUEST LIMINE_SMP_REQUEST
+#endif
+
+__attribute__((used, section(".requests")))
+static volatile struct LIMINE_MP(request) mp_request = {
+    .id       = LIMINE_MP_REQUEST,
+    .revision = 0,
+    .flags    = 0,
+};
+
 
 /* Required start/end markers so Limine can scan the requests section.     */
 __attribute__((used, section(".requests_start_marker")))
@@ -45,6 +56,7 @@ BootFramebuffer g_framebuffer = {0};
 BootMemoryMap   g_memory_map  = {0};
 uint64_t        g_hhdm_offset = 0;
 uint64_t        g_rsdp_address = 0;
+struct LIMINE_MP(response) *g_mp_response = 0;
 
 #define BOOT_MEMMAP_MAX_ENTRIES 512
 static MemoryMapEntry g_memmap_storage[BOOT_MEMMAP_MAX_ENTRIES];
@@ -68,6 +80,9 @@ void limine_init(void) {
 
     if (rsdp_request.response) {
         g_rsdp_address = (uint64_t)(uintptr_t)rsdp_request.response->address;
+    }
+    if (mp_request.response) {
+        g_mp_response = mp_request.response;
     }
 
     if (!framebuffer_request.response ||

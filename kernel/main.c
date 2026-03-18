@@ -22,6 +22,7 @@
 #include <arch/x86_64/cpu/percpu.h>
 #include <arch/x86_64/cpu/vendor.h>
 #include <kernel/init.h>
+#include <kernel/sched.h>
 
 __attribute__((noreturn))
 void kmain(void){
@@ -30,7 +31,11 @@ void kmain(void){
         mem_init();
         arch_cpu_init();
         arch_acpi_init();
+        smp_init();
+        sched_init();
         arch_irq_init();
+
+        
 
 
         virtio_blk_init();

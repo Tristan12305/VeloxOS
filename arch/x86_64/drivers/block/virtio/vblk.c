@@ -48,7 +48,6 @@ static inline uint8_t  _inb (uint16_t p){ uint8_t  v; __asm__ volatile("inb %1,%
 static inline uint16_t _inw (uint16_t p){ uint16_t v; __asm__ volatile("inw %1,%0":"=a"(v):"Nd"(p)); return v; }
 
 
-/* Wait until the drive clears BSY. Returns false on timeout or no drive. */
 static bool ata_wait_ready(void) {
     for (uint32_t i = 0; i < 10000000; i++) {
         uint8_t status = _inb(ATA_STATUS);

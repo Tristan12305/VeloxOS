@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 typedef struct {
     uint8_t  jump[3];
@@ -118,6 +119,18 @@ typedef struct {
                                    // raw_time will be 0
 } fat32_dirent_t;
 
+// High-level FAT32 API error codes (negative, POSIX-ish).
+#define FAT32_OK               0
+#define FAT32_ERR_NOENT       -2
+#define FAT32_ERR_IO          -5
+#define FAT32_ERR_NOMEM       -12
+#define FAT32_ERR_EXIST       -17
+#define FAT32_ERR_NOTDIR      -20
+#define FAT32_ERR_INVAL       -22
+#define FAT32_ERR_NAMETOOLONG -36
+#define FAT32_ERR_NOTSUP      -95
+
+typedef int64_t fat32_ssize_t;
 
 // Initialise a volume context by reading + validating the VBR on the given
 // GPT partition.  Returns false if the partition doesn't look like FAT32.
@@ -147,3 +160,31 @@ bool fat32_read_cluster(fat32_vol_t *vol, uint32_t cluster, void *buf);
 bool fat32_read_dir(fat32_vol_t *vol, uint32_t dir_cluster,
                     fat32_dirent_t *out, uint32_t max_entries,
                     uint32_t *count_out);
+
+// Resolve a path (absolute or relative to volume root) into a directory entry.
+// For "/" or empty path, returns a synthetic entry for the root directory.
+int fat32_lookup_path(fat32_vol_t *vol, const char *path, fat32_dirent_t *out);
+
+// Lookup a single child by name inside a directory cluster.
+int fat32_lookup(fat32_vol_t *vol, uint32_t dir_cluster,
+                 const char *name, fat32_dirent_t *out);
+
+// Read the Nth visible entry in a directory (0-based).
+// Returns 1 if an entry was written, 0 if index is past end, <0 on error.
+int fat32_readdir_index(fat32_vol_t *vol, uint32_t dir_cluster,
+                        size_t index, fat32_dirent_t *out);
+
+// Convenience wrapper around fat32_lookup_path for stat-like queries.
+int fat32_stat_path(fat32_vol_t *vol, const char *path, fat32_dirent_t *out);
+
+// Read file contents at an offset. Returns bytes read or <0 on error.
+fat32_ssize_t fat32_read_file_at(fat32_vol_t *vol,
+                                 uint32_t first_cluster,
+                                 uint32_t file_size,
+                                 uint64_t offset,
+                                 void *buf, size_t len);
+
+// Read directory entries by path.
+int fat32_read_dir_path(fat32_vol_t *vol, const char *path,
+                        fat32_dirent_t *out, uint32_t max_entries,
+                        uint32_t *count_out);
