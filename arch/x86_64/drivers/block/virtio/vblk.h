@@ -3,23 +3,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-/*
- * VirtIO Block Driver — header
- *
- * Supports legacy (transitional) VirtIO 1.0 devices as exposed by QEMU
- * via -device virtio-blk-pci.
- *
- * PCI identity:
- *   Vendor  : 0x1AF4  (Red Hat / VirtIO)
- *   Device  : 0x1001  (legacy block)  /  0x1042  (modern block)
- *   Class   : 0x01  Subclass: 0x00  (SCSI / block storage controller)
- */
 
-/* -----------------------------------------------------------------------
- * VirtIO PCI config-space layout (legacy / transitional BAR0, I/O port)
- * Offsets relative to the virtio-specific region (after the common 20-byte
- * PCI config header area that the device exposes on BAR0 as I/O ports).
- * ----------------------------------------------------------------------- */
 #define VIRTIO_PCI_HOST_FEATURES   0x00   /* R    - 32-bit feature bits offered by device */
 #define VIRTIO_PCI_GUEST_FEATURES  0x04   /* RW   - 32-bit feature bits accepted by driver */
 #define VIRTIO_PCI_QUEUE_PFN       0x08   /* RW   - guest-physical page frame of virtqueue */
