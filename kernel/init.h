@@ -12,4 +12,4 @@ void smp_init(void);
 
 void arch_irq_init(void);
 
-void arch_idle(void) __attribute__((noreturn));
+void idle(void) __attribute__((noreturn));

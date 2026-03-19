@@ -305,7 +305,7 @@ static void vprintk(const char *fmt, va_list args) {
     }
 }
 
-
+static bool print_enabled = false;
 
 void printk_init(void) {
     
@@ -331,6 +331,7 @@ void printk_init(void) {
     cursor_row = 0;
 
     fill_rect(0, 0, fb_pitch_px, fb_height_px, COLOR_BG);
+    print_enabled = true;
 }
 
 void printk(const char *fmt, ...) {
@@ -345,6 +346,9 @@ void printk(const char *fmt, ...) {
 
 void safe_printk(const char *fmt, ...) {
     uint64_t flags = spin_lock_irqsave(&printlock);
+    if(!print_enabled){
+        return;
+    }
     va_list args;
     va_start(args, fmt);
     vprintk(fmt, args);
@@ -365,6 +369,11 @@ void printk_hex8(uint8_t value) {
     emit_char(digits[value        & 0x0F]);
 }
 
+void disable_print(){
+    print_enabled = false;
+}
+
 uint16_t *handoff_framebuffer(void) {
+    disable_print();
     return (uint16_t *)fb_ptr;
 }

@@ -42,7 +42,7 @@ void kmain(void){
         gpt_init();
 
 
-        arch_idle();
+        idle();
         
 }
 

@@ -13,5 +13,5 @@ void safe_printk(const char *fmt, ...);
 void clear_screen();
 
 void printk_hex8(uint8_t value);
-
-uint16_t* handoff_framebuffer();
+void disable_print(void);
+uint16_t* handoff_framebuffer(void);

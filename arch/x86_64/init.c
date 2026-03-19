@@ -37,7 +37,7 @@ void arch_irq_init(void) {
 }
 
 __attribute__((noreturn))
-void arch_idle(void) {
+void idle(void) {
     for (;;)
         __asm__ volatile ("hlt");
 }
