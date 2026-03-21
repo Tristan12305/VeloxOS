@@ -36,3 +36,6 @@ bool paging_unmap_range(uint64_t root_pml4_phys, uint64_t virt_addr, uint64_t si
 bool paging_protect_page(uint64_t root_pml4_phys, uint64_t virt_addr, uint64_t flags);
 bool paging_protect_range(uint64_t root_pml4_phys, uint64_t virt_addr, uint64_t size, uint64_t flags);
 void paging_invlpg(uint64_t virt_addr);
+uint64_t paging_read_cr3(void);
+void paging_load_cr3(uint64_t phys_addr);
+void paging_tlb_flush_all(void);

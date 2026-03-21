@@ -219,10 +219,7 @@ void kfree(void *ptr) {
     /* Return the block to the free list. */
     free_list_insert(block);
 
-    /* --- Forward coalescing ---
-     *
-     * If the physically-next block is also free, merge them into one.
-     * We can repeat this to greedily absorb a run of free blocks.       */
+  
     while (block->next_phys != NULL && block->next_phys->free) {
         kmalloc_block_t *next = block->next_phys;
 

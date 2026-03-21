@@ -7,6 +7,7 @@
 #include <boot/boot.h>
 #include <include/printk.h>
 #include <kernel/panic.h>
+#include <kernel/ipi.h>
 #include "drivers/IO/ps2_keyboard.h"
 
 
@@ -26,6 +27,7 @@ void arch_cpu_init(void) {
     idt_init();
     if (!x86_lapic_bsp_init())
         panic("LAPIC BSP init failed");
+    ipi_init();
 }
 
 void arch_irq_init(void) {

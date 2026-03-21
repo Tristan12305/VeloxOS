@@ -4,6 +4,7 @@
 #include <include/printk.h>
 #include <kernel/panic.h>
 #include <kernel/sched.h>
+#include <kernel/ipi.h>
 
 static const char* const exception_messages[] = {
     "Divide by Zero",
@@ -70,6 +71,9 @@ interrupt_frame *isr_handler(interrupt_frame* frame) {
     irq_dispatch(frame);
 
     if (frame->vector == SCHED_TICK_VECTOR) {
+        frame = sched_on_tick(frame);
+    }
+    if (frame->vector == IPI_VECTOR_RESCHED && sched_is_ready()) {
         frame = sched_on_tick(frame);
     }
 

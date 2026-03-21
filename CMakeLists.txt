@@ -51,6 +51,7 @@ add_executable(kernel.elf
     kernel/memory.c
     arch/x86_64/init.c
     kernel/sched.c
+    kernel/ipi.c
 
 )
 

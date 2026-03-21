@@ -5,6 +5,7 @@
 #include <include/printk.h>
 #include <include/spinlock.h>
 #include <kernel/panic.h>
+#include <kernel/ipi.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -18,6 +19,16 @@ extern char __kernel_physical_start;
 
 extern uint64_t paging_read_cr3(void);
 extern void paging_load_cr3(uint64_t phys_addr);
+
+static inline uint64_t paging_read_cr4(void) {
+    uint64_t value;
+    __asm__ volatile("mov %%cr4, %0" : "=r"(value));
+    return value;
+}
+
+static inline void paging_write_cr4(uint64_t value) {
+    __asm__ volatile("mov %0, %%cr4" :: "r"(value) : "memory");
+}
 
 #define PAGE_SIZE_4K  0x1000ULL
 #define PAGE_SIZE_2M  0x200000ULL
@@ -584,6 +595,20 @@ bool paging_translate(uint64_t root_pml4_phys, uint64_t virt_addr, uint64_t* out
 
 void paging_invlpg(uint64_t virt_addr) {
     __asm__ volatile("invlpg (%0)" :: "r"(virt_addr) : "memory");
+    if (ipi_ready()) {
+        ipi_tlb_shootdown();
+    }
+}
+
+void paging_tlb_flush_all(void) {
+    uint64_t cr3 = paging_read_cr3();
+    paging_load_cr3(cr3);
+    uint64_t cr4 = paging_read_cr4();
+    const uint64_t cr4_pge = 1ULL << 7;
+    if (cr4 & cr4_pge) {
+        paging_write_cr4(cr4 & ~cr4_pge);
+        paging_write_cr4(cr4);
+    }
 }
 
 static bool paging_map_page_locked(uint64_t root_pml4_phys,
