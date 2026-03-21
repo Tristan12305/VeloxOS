@@ -101,13 +101,13 @@ void sched_init(void) {
     uint32_t init_count = 0;
     if (!x86_lapic_timer_calibrate(SCHED_TICK_HZ, &init_count)) {
         init_count = SCHED_LAPIC_FALLBACK_COUNT;
-        printk("[sched] LAPIC timer calibration failed; using fallback count=%u\n",
+        safe_printk("[sched] LAPIC timer calibration failed; using fallback count=%u\n",
                init_count);
     }
     g_sched_lapic_init_count = init_count;
 
     if (!x86_lapic_timer_start(SCHED_TICK_VECTOR, g_sched_lapic_init_count, true)) {
-        printk("[sched] LAPIC timer start failed on BSP\n");
+        safe_printk("[sched] LAPIC timer start failed on BSP\n");
     }
 
     g_sched_ready = 1;
@@ -126,7 +126,7 @@ void sched_ap_init(void) {
     }
 
     if (!x86_lapic_timer_start(SCHED_TICK_VECTOR, g_sched_lapic_init_count, true)) {
-        printk("[sched] LAPIC timer start failed on AP %u\n", cpu->cpu_id);
+        safe_printk("[sched] LAPIC timer start failed on AP %u\n", cpu->cpu_id);
     }
 }
 

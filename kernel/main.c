@@ -32,6 +32,7 @@ void kmain(void){
         arch_cpu_init();
         arch_acpi_init();
         smp_init();
+        kmalloc_init();
         sched_init();
         arch_irq_init();
 

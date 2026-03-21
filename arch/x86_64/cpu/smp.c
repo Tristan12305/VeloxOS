@@ -22,18 +22,20 @@ static void smp_ap_entry(struct LIMINE_MP(info) *info) {
         for (;;)
             __asm__ volatile("hlt");
     }
+    
+    register uint64_t  _new_rsp __asm__("rax") = cpu->kernel_stack_top;
+    register cpu_t    *_cpu     __asm__("rdi") = cpu;
+    register void     *_info    __asm__("rsi") = info;
+    void (*_fn)(cpu_t *, struct LIMINE_MP(info) *) = smp_ap_entry_main;
 
     __asm__ volatile(
-        "mov %0, %%rsp\n"
-        "mov %1, %%rdi\n"
-        "mov %2, %%rsi\n"
+        "mov %%rax, %%rsp\n"   // switch to AP stack
+        "sub $8, %%rsp\n"      // maintain 16-byte alignment for jmp-as-call
+        "xor %%rbp, %%rbp\n"   // clear frame pointer (no parent frame)
         "jmp *%3\n"
-        :: "r"(cpu->kernel_stack_top),
-           "r"(cpu),
-           "r"(info),
-           "r"(smp_ap_entry_main)
-        : "rdi", "rsi", "memory");
-
+        :: "r"(_new_rsp), "r"(_cpu), "r"(_info), "r"(_fn)
+        : "memory"
+    );
     __builtin_unreachable();
 }
 
@@ -51,7 +53,7 @@ static void smp_ap_entry_main(cpu_t *cpu, struct LIMINE_MP(info) *info) {
     idt_load();
 
     if (!x86_lapic_ap_init(cpu)) {
-        printk("[smp] AP %u LAPIC init failed\n", cpu->cpu_id);
+        safe_printk("[smp] AP %u LAPIC init failed\n", cpu->cpu_id);
         for (;;)
             __asm__ volatile("pause");
     }
@@ -71,7 +73,7 @@ static void smp_ap_entry_main(cpu_t *cpu, struct LIMINE_MP(info) *info) {
 
 void smp_init(void) {
     if (!g_mp_response || !g_mp_response->cpus || g_mp_response->cpu_count == 0) {
-        printk("[smp] Limine MP response missing; running as UP\n");
+        safe_printk("[smp] Limine MP response missing; running as UP\n");
         g_cpu_count = 1;
         g_cpus[0].cpu_id = 0;
         g_cpus[0].is_bsp = true;
@@ -87,7 +89,7 @@ void smp_init(void) {
     g_cpus[0].online = true;
 
     if (g_cpus[0].apic_id != 0 && g_cpus[0].apic_id != bsp_lapic) {
-        printk("[smp] BSP LAPIC mismatch: lapic=%u limine=%u\n",
+        safe_printk("[smp] BSP LAPIC mismatch: lapic=%u limine=%u\n",
                g_cpus[0].apic_id, bsp_lapic);
     }
 
@@ -103,7 +105,7 @@ void smp_init(void) {
             continue;
         }
         if (next_cpu >= MAX_CPUS) {
-            printk("[smp] CPU limit reached (%u)\n", MAX_CPUS);
+            safe_printk("[smp] CPU limit reached (%u)\n", MAX_CPUS);
             break;
         }
 
@@ -116,12 +118,13 @@ void smp_init(void) {
 
         void *stack = vmalloc(SMP_STACK_SIZE, VMALLOC_DEFAULT_FLAGS);
         if (!stack) {
-            printk("[smp] AP %u stack alloc failed\n", next_cpu);
+            safe_printk("[smp] AP %u stack alloc failed\n", next_cpu);
             continue;
         }
 
         cpu->kernel_stack_top = (uintptr_t)stack + SMP_STACK_SIZE;
         info->extra_argument = (uint64_t)(uintptr_t)cpu;
+        __asm__ volatile("mfence" ::: "memory");
         info->goto_address = smp_ap_entry;
 
         started++;
@@ -136,11 +139,11 @@ void smp_init(void) {
             __asm__ volatile("pause");
         }
         if (!cpu->online) {
-            printk("[smp] AP %u failed to come online\n", cpu->cpu_id);
+            safe_printk("[smp] AP %u failed to come online\n", cpu->cpu_id);
         }
     }
 
-    printk("[smp] BSP=%u APs started=%u total=%u\n",
+    safe_printk("[smp] BSP=%u APs started=%u total=%u\n",
            bsp_lapic,
            started,
            g_cpu_count);

@@ -9,5 +9,5 @@ void mem_init(void) {
     pmm_init(&g_memory_map);
     paging_init(&g_memory_map);
     vmalloc_init();
-    kmalloc_init();
+    //kmalloc_init();
 }
